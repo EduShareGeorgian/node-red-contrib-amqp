@@ -45,20 +45,26 @@ module.exports = function (RED: NodeRedApp): void {
 
     async function initializeNode(nodeIns) {
       reconnect = async () => {
+        try{
         // check the channel and clear all the event listener
         if (channel && channel.removeAllListeners) {
           channel.removeAllListeners()
-          channel.close();
+          if(connection.channel.status === 'open') {
+            connection.close();
+          }
           channel = null;
         }
 
         // check the connection and clear all the event listener
         if (connection && connection.removeAllListeners) {
           connection.removeAllListeners()
-          connection.close();
+          if(connection.channel.status === 'open') {
+            connection.close();
+          }
           connection = null;
         }
-
+      }
+      catch(e){}
         // always clear timer before set it;
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(() => {

@@ -1,7 +1,7 @@
 
 
 # source
-This repo fork from @meowwolf/node-red-contrib-amqp
+This repo fork from @stormwolf/node-red-contrib-amqp
 
 and
 

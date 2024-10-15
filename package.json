@@ -1,5 +1,5 @@
 {
-  "name": "@EduShareGeorgian/node-red-contrib-amqp",
+  "name": "@edusharegeorgian/node-red-contrib-amqp",
   "license": "ISC",
   "version": "1.4.2",
   "description": "Amqp nodes for node-red",
@@ -35,7 +35,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git@github.com:EduShareGeorgian/node-red-contrib-amqp.git"
+    "url": "git@github.com:edusharegeorgian/node-red-contrib-amqp.git"
   },
   "contributors": [
     "Amo DelBello <adelbello@meowwolf.com>",

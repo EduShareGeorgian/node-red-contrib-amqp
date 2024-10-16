@@ -13,7 +13,8 @@
     "test": "npm run build && mocha",
     "test:watch": "mocha -w",
     "test:cov": "npm run build && nyc mocha",
-    "login": "npm login --registry https://registry.npmjs.com --auth-type=web"
+    "login": "npm login --registry https://registry.npmjs.com --auth-type=web",
+    "prepare": "npm run build"
   },
   "keywords": [
     "node-red",

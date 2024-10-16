@@ -6,7 +6,7 @@
       name: { value: '' },
       broker: { value: '', type: 'amqp-broker' },
       prefetch: { value: 0 },
-      reconnectOnError: { value: false },
+      reconnectOnError: { value: true },
       noAck: { value: true },
       exchangeName: { value: '' },
       exchangeType: { value: 'topic' },
@@ -59,9 +59,10 @@
   div.wide-label-amqp-in label {
     width: 30% !important;
   }
+
   div.wide-label-amqp-in input {
     width: 65% !important;
-  } 
+  }
 </style>
 
 <script type="text/html" data-template-name="amqp-in">

@@ -66,13 +66,24 @@ module.exports = function (RED: NodeRedApp): void {
             ),
           )
           break
-        case 'jsonata':
-          amqp.setRoutingKey(
-            RED.util.evaluateJSONataExpression(
-              RED.util.prepareJSONataExpression(exchangeRoutingKey, this),
-              msg,
-            ),
-          )
+        case 'jsonata':         
+            function evaluateJSONataasPromise(exchangeRoutingKey: any, msg: any, amqp: any): Promise<void> {
+              return new Promise((resolve, reject) => {
+                RED.util.evaluateJSONataExpression(
+                  RED.util.prepareJSONataExpression(exchangeRoutingKey, this),
+                  msg,
+                  function (er, val) {
+                    if (er) {
+                      reject(er);
+                    } else {
+                      amqp.setRoutingKey(val);
+                      resolve();
+                    }
+                  }
+                );
+              });
+            }
+            await evaluateJSONataasPromise(exchangeRoutingKey, msg, amqp);        
           break
         case 'str':
         default:
@@ -105,20 +116,27 @@ module.exports = function (RED: NodeRedApp): void {
 
     async function initializeNode(nodeIns) {
       reconnect = async () => {
-        // check the channel and clear all the event listener
+        try{
+        // check the channel and clear all the event listener        
         if (channel && channel.removeAllListeners) {
-          channel.removeAllListeners()
-          channel.close();
+          channel.removeAllListeners()        
+          if(connection.channel.status === 'open') {
+            connection.close();
+          }
           channel = null;
         }
 
         // check the connection and clear all the event listener
         if (connection && connection.removeAllListeners) {
           connection.removeAllListeners()
-          connection.close();
+          if(connection.channel.status === 'open') {
+            connection.close();
+          }          
           connection = null;
         }
-
+      }
+      catch(e){
+      }
         // always clear timer before set it;
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(() => {

@@ -5,7 +5,7 @@
     defaults: {
       name: { value: '' },
       broker: { value: '', type: 'amqp-broker' },
-      reconnectOnError: { value: false },
+      reconnectOnError: { value: true },
       exchangeName: { value: '' },
       exchangeType: { value: 'topic' },
       exchangeRoutingKey: { value: '' },
@@ -79,21 +79,27 @@
   div.wide-label-amqp-out label {
     width: 35% !important;
   }
+
   div.wide-label-amqp-out input.simple-input {
     width: 64% !important;
   }
+
   div.wide-label-amqp-out div.red-ui-typedInput-container {
     width: 64% !important
   }
+
   div.wider-label-amqp-out label {
     width: 50% !important;
   }
+
   select.small-amqp-out {
     width: 75px !important;
   }
+
   input.small-amqp-out {
     width: 120px !important;
   }
+
   div.form-tips {
     margin: 20px 0;
   }
@@ -101,7 +107,7 @@
 
 <script type="text/html" data-template-name="amqp-out">
   <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i>&nbsp;&nbsp;名称</label>
+    <label for="node-input-name"><i class="fa fa-tag"></i>&nbsp;&nbsp;Name</label>
     <input type="text" id="node-input-name" placeholder="Leave blank to use exchange name">
   </div>
   <div class="form-row">

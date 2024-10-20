@@ -272,12 +272,19 @@ export default class Amqp {
   }
 
   public async close(): Promise<void> {
-    const { name: exchangeName } = this.config.exchange
-    const queueName = this.q?.queue
+    const {
+      exchange: {
+        name: exchangeName
+      },
+      queue: {
+        name: queueName,
+        autoDelete: queueAutoDelete
+      }
+    } = this.config
 
     try {
       /* istanbul ignore else */
-      if (exchangeName && queueName) {
+      if (exchangeName && queueName && queueAutoDelete) {
         const routingKeys = this.parseRoutingKeys()
         try {
           for (let x = 0; x < routingKeys.length; x++) {
@@ -294,7 +301,7 @@ export default class Amqp {
       }
       await this.channel.close()
       await this.connection.close()
-    } catch (e) {} // Need to catch here but nothing further is necessary
+    } catch (e) { } // Need to catch here but nothing further is necessary
   }
 
   private async createChannel(): Promise<Channel> {

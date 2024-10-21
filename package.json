@@ -1,13 +1,13 @@
 {
   "name": "@edusharegeorgian/node-red-contrib-amqp",
   "license": "ISC",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Amqp nodes for node-red",
   "main": "index.js",
   "scripts": {
     "start": "nodemon --exec npm run build",
-    "build": "rimraf build && tsc -p . && npm run copyassets",
-    "build:production": "rimraf build && tsc --sourceMap false -p . && npm run copyassets",
+    "build": "npx rimraf build && tsc -p . && npm run copyassets",
+    "build:production": "npx rimraf build && tsc --sourceMap false -p . && npm run copyassets",
     "copyassets": "copyfiles -f src/nodes/**/*.html build/src/nodes && copyfiles -f src/nodes/icons/* build/src/nodes/icons",
     "lint": "eslint \"src/**\"",
     "test": "npm run build && mocha",

@@ -43,6 +43,9 @@ module.exports = function (RED: NodeRedApp): void {
           case ManualAckType.Reject:
             amqp.reject(msg)
             break
+          case ManualAckType.Close:
+            await amqp.close()
+            break
           case ManualAckType.Ack:
           default:
             amqp.ack(msg)

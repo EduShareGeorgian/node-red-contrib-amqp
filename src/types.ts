@@ -86,6 +86,7 @@ export enum ManualAckType {
   Nack = 'nack',
   NackAll = 'nackAll',
   Reject = 'reject',
+  Close = "close",
 }
 
 export enum ErrorType {

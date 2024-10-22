@@ -1,7 +1,7 @@
 {
   "name": "@edusharegeorgian/node-red-contrib-amqp",
   "license": "ISC",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "Amqp nodes for node-red",
   "main": "index.js",
   "scripts": {

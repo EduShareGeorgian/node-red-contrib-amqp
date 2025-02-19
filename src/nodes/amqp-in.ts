@@ -2,6 +2,7 @@ import { NodeRedApp, EditorNodeProperties } from 'node-red'
 import { NODE_STATUS } from '../constants'
 import { AmqpInNodeDefaults, AmqpOutNodeDefaults, ErrorType, NodeType, ErrorLocationEnum } from '../types'
 import Amqp from '../Amqp'
+import { processReconnect } from '../common/amqp-utils'
 
 module.exports = function (RED: NodeRedApp): void {
   function AmqpIn(config: EditorNodeProperties): void {
@@ -26,12 +27,8 @@ module.exports = function (RED: NodeRedApp): void {
     const reconnectOnError = configAmqp.reconnectOnError;
 
     const inputListener = async (msg, _, done) => {
-      if (msg.payload && msg.payload.reconnectCall && typeof reconnect === 'function') {
-        await reconnect()
-        done && done()
-      } else {
-        done && done()
-      }
+      // Then handle reconnect if needed.
+      await processReconnect(msg, reconnect, done)
     }
 
     // receive input reconnectCall

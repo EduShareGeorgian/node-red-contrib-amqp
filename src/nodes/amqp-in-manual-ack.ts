@@ -2,6 +2,7 @@ import { NodeRedApp, EditorNodeProperties } from 'node-red'
 import { NODE_STATUS } from '../constants'
 import { ErrorType, NodeType, ManualAckType, AmqpOutNodeDefaults, AmqpInNodeDefaults, ErrorLocationEnum } from '../types'
 import Amqp from '../Amqp'
+import { handleAck, processReconnect } from '../common/amqp-utils'
 
 module.exports = function (RED: NodeRedApp): void {
   function AmqpInManualAck(config: EditorNodeProperties): void {
@@ -22,47 +23,17 @@ module.exports = function (RED: NodeRedApp): void {
     const configAmqp: AmqpInNodeDefaults & AmqpOutNodeDefaults = config;
 
     const amqp = new Amqp(RED, this, configAmqp)
-
     const reconnectOnError = configAmqp.reconnectOnError;
-
     const inputListener = async (msg, _, done) => {
-      // handle manualAck
-      if (msg.manualAck) {
-        const ackMode = msg.manualAck.ackMode
-
-        switch (ackMode) {
-          case ManualAckType.AckAll:
-            amqp.ackAll()
-            break
-          case ManualAckType.Nack:
-            amqp.nack(msg)
-            break
-          case ManualAckType.NackAll:
-            amqp.nackAll(msg)
-            break
-          case ManualAckType.Reject:
-            amqp.reject(msg)
-            break
-          case ManualAckType.Close:
-            await amqp.close()
-            break
-          case ManualAckType.Ack:
-          default:
-            amqp.ack(msg)
-            break
-        }
-      } else {
-        amqp.ack(msg)
+      try {
+        await handleAck(msg, amqp);
+      } catch (e) {
+        this.error(`Ack error ${e}`, { payload: { error: e, reconnectOnError } });
+        reconnectOnError && (await reconnect());
       }
-      // handle manual reconnect
-      if (msg.payload && msg.payload.reconnectCall && typeof reconnect === 'function') {
-        await reconnect()
-        done && done()
-      } else {
-        done && done()
-      }
+      // Then handle reconnect if needed.
+      await processReconnect(msg, reconnect, done)
     }
-    // receive input reconnectCall
     this.on('input', inputListener)
     // When the server goes down
     this.on('close', async (done: () => void): Promise<void> => {
@@ -113,7 +84,7 @@ module.exports = function (RED: NodeRedApp): void {
 
           // When the connection goes down
           connection.on('error', async e => {
-            e && reconnectOnError && (await reconnect())
+            reconnectOnError && (await reconnect())
             nodeIns.error(`Connection error ${e}`, { payload: { error: e, location: ErrorLocationEnum.ConnectionErrorEvent } })
           })
 

@@ -1,7 +1,7 @@
 {
   "name": "@edusharegeorgian/node-red-contrib-amqp",
   "license": "ISC",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "Amqp nodes for node-red",
   "main": "index.js",
   "scripts": {
@@ -78,7 +78,7 @@
     "typescript": "^5.6.3"
   },
   "dependencies": {
-    "amqplib": "^0.10.4",
+    "amqplib": "^0.10.7",
     "lodash.clonedeep": "^4.5.0",
     "uuid": "^10.0.0"
   },

@@ -35,7 +35,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/EduShareGeorgian/node-red-contrib-amqp.git"
+    "url": "git+https://github.com/EduShareGeorgian/node-red-contrib-amqp.git"
   },
   "contributors": [
     "Amo DelBello <adelbello@meowwolf.com>",

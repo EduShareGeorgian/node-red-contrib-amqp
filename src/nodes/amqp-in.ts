@@ -22,6 +22,13 @@ module.exports = function (RED: NodeRedApp): void {
 
     const configAmqp: AmqpInNodeDefaults & AmqpOutNodeDefaults = config;
 
+    // Enhancement: If no queue name, do not setup AMQP
+    if (!configAmqp.queueName || String(configAmqp.queueName).trim() === '') {
+      this.status({ fill: 'red', shape: 'ring', text: 'No queue name' });
+      this.warn('AMQP not initialized: queue name is missing in configuration.');
+      return;
+    }
+
     const amqp = new Amqp(RED, this, configAmqp)
 
     const reconnectOnError = configAmqp.reconnectOnError;

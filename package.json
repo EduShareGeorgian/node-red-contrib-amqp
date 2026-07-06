@@ -13,6 +13,9 @@
     "test": "npm run build && mocha",
     "test:watch": "mocha -w",
     "test:cov": "npm run build && nyc mocha",
+    "publish:setup-token": "node scripts/publish-setup-help.js",
+    "publish:check": "npm run publish:setup-token",
+    "publish:release": "npm run publish:check && npm publish --access public",
     "login": "npm login --registry https://registry.npmjs.com --auth-type=web",
     "prepare": "npm run build"
   },

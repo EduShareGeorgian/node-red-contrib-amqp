@@ -83,6 +83,25 @@ describe('Amqp Class', () => {
     expect(connection).to.eq(result)
   })
 
+  it('connect() uses amqp protocol when tls is false', async () => {
+    const error = 'error!'
+    const result = { on: (): string => error }
+    // @ts-ignore
+    const connectSpy = sinon.stub(amqplib, 'connect').resolves(result)
+
+    const brokerWithoutTls = { ...brokerConfigFixture, tls: false }
+    amqp.config.broker = brokerWithoutTls as any
+
+    await amqp.connect()
+
+    const calledArg = connectSpy.getCall(0).args[0] as any
+    const calledUrl = typeof calledArg === 'string' ? calledArg : calledArg.url
+    expect(
+      (calledUrl as string).startsWith('amqp://'),
+      'URL should start with amqp:// when tls is false',
+    ).to.be.true
+  })
+
   it('initialize()', async () => {
     const createChannelStub = sinon.stub()
     const assertExchangeStub = sinon.stub()
@@ -205,15 +224,313 @@ describe('Amqp Class', () => {
       expect(publishStub.calledOnce).to.equal(true)
       expect(errorStub.calledOnce).to.equal(true)
     })
+
+    it('throws when channel is unavailable for publish', async () => {
+      const errorStub = sinon.stub()
+      amqp.channel = {}  // publish property is undefined
+      amqp.node = { error: errorStub }
+      amqp.config.exchange.name = 'test-exchange'
+
+      await amqp.publish('test message')
+
+      expect(errorStub.calledOnce, 'error handler should be called').to.be.true
+      const errorMsg = errorStub.getCall(0).args[0]
+      expect(
+        errorMsg.includes('AMQP channel unavailable'),
+        'error should indicate channel is unavailable',
+      ).to.be.true
+    })
+
+    it('publishes with properties.correlationId (skips config fallback)', async () => {
+      const publishStub = sinon.stub()
+      const handleRPCStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.handleRemoteProcedureCall = handleRPCStub
+      amqp.config.amqpProperties = { correlationId: 'config-corr-id', replyTo: 'config-reply' }
+      amqp.config.outputs = 1  // Enable RPC mode
+
+      await amqp.publish('message', {
+        correlationId: 'prop-corr-id',
+        replyTo: 'prop-reply',
+      })
+
+      expect(publishStub.calledOnce, 'publish should be called').to.be.true
+      const callArgs = publishStub.getCall(0).args
+      // The options are the 4th argument to channel.publish()
+      const options = callArgs[3] as any
+      expect(options.correlationId, 'should use properties correlationId').to.equal('prop-corr-id')
+      expect(options.replyTo, 'should use properties replyTo').to.equal('prop-reply')
+    })
+
+    it('publishes with config.amqpProperties.correlationId fallback', async () => {
+      const publishStub = sinon.stub()
+      const handleRPCStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.handleRemoteProcedureCall = handleRPCStub
+      amqp.config.amqpProperties = { correlationId: 'config-corr-id', replyTo: 'config-reply' }
+      amqp.config.outputs = 1  // Enable RPC mode
+
+      await amqp.publish('message')  // no properties argument
+
+      expect(publishStub.calledOnce, 'publish should be called').to.be.true
+      const callArgs = publishStub.getCall(0).args
+      const options = callArgs[3] as any
+      expect(options.correlationId, 'should use config correlationId').to.equal('config-corr-id')
+      expect(options.replyTo, 'should use config replyTo').to.equal('config-reply')
+    })
+
+    it('publishes with uuidv4 fallback when no config properties', async () => {
+      const publishStub = sinon.stub()
+      const handleRPCStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.handleRemoteProcedureCall = handleRPCStub
+      amqp.config.amqpProperties = {}  // empty config
+      amqp.config.outputs = 1  // Enable RPC mode
+
+      await amqp.publish('message')  // no properties argument
+
+      expect(publishStub.calledOnce, 'publish should be called').to.be.true
+      const callArgs = publishStub.getCall(0).args
+      const options = callArgs[3] as any
+      // When neither properties nor config has values, uuidv4 is used
+      expect(options.correlationId, 'should use uuidv4 for correlationId').to.match(/^[0-9a-f-]{36}$/)  // UUID format
+      expect(options.replyTo, 'should use uuidv4 for replyTo').to.match(/^[0-9a-f-]{36}$/)  // UUID format
+    })
+  })
+
+  it('handleRemoteProcedureCall() sends timeout message when RPC times out', async () => {
+    const clock = sinon.useFakeTimers()
+    const correlationId = 'test-correlation-123'
+    const queueName = 'rpc-reply-queue'
+    const deleteQueueStub = sinon.stub().resolves()
+    const sendStub = sinon.stub()
+    const errorStub = sinon.stub()
+    const assertQueueStub = sinon.stub().resolves(queueName)
+
+    const consumeStub = sinon.stub().resolves()
+
+    amqp.channel = {
+      consume: consumeStub,
+      deleteQueue: deleteQueueStub,
+    }
+    amqp.assertQueue = assertQueueStub
+    amqp.node = { send: sendStub, error: errorStub }
+    amqp.config.rpcTimeout = 1000
+
+    try {
+      const rpcPromise = amqp.handleRemoteProcedureCall(correlationId, queueName)
+
+      // Fast-forward time to trigger timeout
+      await clock.tickAsync(1100)
+      await rpcPromise
+
+      expect(
+        sendStub.calledOnce,
+        'send should be called with timeout message',
+      ).to.be.true
+      expect(
+        sendStub.getCall(0).args[0].payload.message.includes('Timeout'),
+        'message should indicate timeout',
+      ).to.be.true
+    } finally {
+      clock.restore()
+    }
+  })
+
+  it('handleRemoteProcedureCall() handles error during queue deletion in timeout', async () => {
+    const clock = sinon.useFakeTimers()
+    const correlationId = 'test-correlation-123'
+    const queueName = 'rpc-reply-queue'
+    const deleteError = new Error('Queue deletion failed')
+    const deleteQueueStub = sinon.stub().rejects(deleteError)
+    const sendStub = sinon.stub()
+    const errorStub = sinon.stub()
+    const assertQueueStub = sinon.stub().resolves(queueName)
+
+    const consumeStub = sinon.stub().resolves()
+
+    amqp.channel = {
+      consume: consumeStub,
+      deleteQueue: deleteQueueStub,
+    }
+    amqp.assertQueue = assertQueueStub
+    amqp.node = { send: sendStub, error: errorStub }
+    amqp.config.rpcTimeout = 500
+
+    try {
+      const rpcPromise = amqp.handleRemoteProcedureCall(correlationId, queueName)
+
+      // Fast-forward to trigger timeout and error handling
+      await clock.tickAsync(600)
+      await rpcPromise
+
+      expect(
+        errorStub.calledOnce,
+        'error should be called when queue deletion fails',
+      ).to.be.true
+      expect(
+        errorStub.getCall(0).args[0].includes('Error trying to cancel RPC consumer'),
+        'error message should indicate RPC consumer error',
+      ).to.be.true
+    } finally {
+      clock.restore()
+    }
+  })
+
+  it('handleRemoteProcedureCall() handles correlation ID mismatch', async () => {
+    const correlationId = 'test-correlation-123'
+    const queueName = 'rpc-reply-queue'
+    const deleteQueueStub = sinon.stub().resolves()
+    const assertQueueStub = sinon.stub().resolves(queueName)
+
+    let capturedQueue: string | undefined
+    let capturedCallback: any
+    const consumeStub = sinon.stub().callsFake((queue, callback, options) => {
+      capturedQueue = queue
+      capturedCallback = callback
+      return Promise.resolve()
+    })
+
+    amqp.channel = {
+      consume: consumeStub,
+      deleteQueue: deleteQueueStub,
+    }
+    amqp.assertQueue = assertQueueStub
+    amqp.node = { send: sinon.stub(), error: sinon.stub() }
+
+    // Start RPC but don't wait (to avoid timeout)
+    amqp.handleRemoteProcedureCall(correlationId, queueName)
+
+    // Let the promise execute
+    await new Promise(resolve => setImmediate(resolve))
+
+    // Invoke consume callback with MISMATCHED correlation ID
+    if (capturedCallback) {
+      const mockMessage = {
+        content: Buffer.from('test response'),
+        properties: { correlationId: 'different-correlation-id' },
+      }
+      // Should not call send when correlation IDs don't match
+      await capturedCallback(mockMessage)
+    }
+
+    // After timeout, error should NOT have been called for mismatch (message just discarded)
+    expect(
+      consumeStub.calledOnce,
+      'consume should be called',
+    ).to.be.true
+  })
+
+  it('handleRemoteProcedureCall() invokes consume callback with correct config', async () => {
+    const correlationId = 'test-correlation-123'
+    const queueName = 'rpc-reply-queue'
+    const deleteQueueStub = sinon.stub().resolves()
+    const assertQueueStub = sinon.stub().resolves(queueName)
+
+    let capturedQueue: string | undefined
+    let capturedOptions: any
+    let capturedCallback: any
+    const consumeStub = sinon.stub().callsFake((queue, callback, options) => {
+      capturedQueue = queue
+      capturedCallback = callback
+      capturedOptions = options
+      return Promise.resolve()
+    })
+
+    amqp.channel = {
+      consume: consumeStub,
+      deleteQueue: deleteQueueStub,
+    }
+    amqp.assertQueue = assertQueueStub
+    amqp.node = { send: sinon.stub(), error: sinon.stub() }
+    amqp.config.noAck = false
+
+    // Start RPC but don't wait (to avoid the timeout)
+    amqp.handleRemoteProcedureCall(correlationId, queueName)
+
+    // Let the promise execute far enough to set up consume
+    await new Promise(resolve => setImmediate(resolve))
+
+    // Verify consume was called with correct parameters
+    expect(
+      consumeStub.calledOnce,
+      'consume should be called to set up RPC listener',
+    ).to.be.true
+    expect(
+      capturedQueue,
+      'consume should use the RPC reply queue',
+    ).to.equal(queueName)
+    expect(
+      capturedOptions.noAck,
+      'consume should use noAck=true for RPC',
+    ).to.be.true
+
+    // Invoke consume callback with message to verify the callback handler logic
+    if (capturedCallback) {
+      const sendStub = sinon.stub()
+      amqp.node.send = sendStub
+
+      // Test with matching correlation ID
+      const mockMessage = {
+        content: Buffer.from('test response'),
+        properties: { correlationId },
+      }
+      await capturedCallback(mockMessage)
+
+      expect(
+        sendStub.calledOnce,
+        'send should be called when correlation ID matches',
+      ).to.be.true
+    }
+  })
+
+  it('handleRemoteProcedureCall() handles error during RPC setup', async () => {
+    const correlationId = 'test-correlation-123'
+    const queueName = 'rpc-reply-queue'
+    const setupError = new Error('RPC setup failed')
+    const assertQueueStub = sinon.stub().rejects(setupError)
+    const errorStub = sinon.stub()
+
+    amqp.assertQueue = assertQueueStub
+    amqp.node = { error: errorStub }
+
+    // Call handleRemoteProcedureCall - it should handle the error internally
+    await amqp.handleRemoteProcedureCall(correlationId, queueName)
+
+    // Error handler should be called when setup fails
+    expect(
+      errorStub.calledOnce,
+      'error should be called when RPC setup fails',
+    ).to.be.true
+    expect(
+      errorStub.getCall(0).args[0].includes('Could not consume RPC message'),
+      'error message should indicate RPC consumption error',
+    ).to.be.true
+  })
+
+  it('getCredsFromSettings() retrieves username and password from RED.settings', () => {
+    const testUsername = 'testuser123'
+    const testPassword = 'testpass456'
+
+    amqp.RED.settings = {
+      MW_CONTRIB_AMQP_USERNAME: testUsername,
+      MW_CONTRIB_AMQP_PASSWORD: testPassword,
+    }
+
+    // @ts-ignore - accessing private method for testing
+    const creds = amqp.getCredsFromSettings()
+
+    expect(creds.username, 'username should match').to.equal(testUsername)
+    expect(creds.password, 'password should match').to.equal(testPassword)
   })
 
   it('close()', async () => {
     const { exchangeName, exchangeRoutingKey } = nodeConfigFixture
     const queueName = 'queueName'
 
-    const unbindQueueStub = sinon.stub()
-    const channelCloseStub = sinon.stub()
-    const connectionCloseStub = sinon.stub()
+    const unbindQueueStub = sinon.stub().resolves()
+    const channelCloseStub = sinon.stub().resolves()
+    const connectionCloseStub = sinon.stub().resolves()
     const assertQueueStub = sinon.stub().resolves({ queue: queueName })
 
     amqp.channel = {
@@ -222,6 +539,7 @@ describe('Amqp Class', () => {
       assertQueue: assertQueueStub,
     }
     amqp.connection = { close: connectionCloseStub }
+    amqp.config.queue.name = queueName
     await amqp.assertQueue()
 
     await amqp.close()
@@ -357,5 +675,376 @@ describe('Amqp Class', () => {
     expect(bindQueueStub.calledWith(queue, exchangeName, '', headers)).to.equal(
       true,
     )
+  })
+
+  it('setRoutingKey() updates exchange routing key', () => {
+    const newRoutingKey = 'new.routing.key'
+    amqp.setRoutingKey(newRoutingKey)
+    expect(
+      amqp.config.exchange.routingKey,
+      'routing key should be updated',
+    ).to.equal(newRoutingKey)
+  })
+
+  it('parseRoutingKeys() uses routingKeyArg when provided', () => {
+    amqp.config.exchange.routingKey = 'config.routing.key'
+    amqp.q = { queue: 'queue.fallback' }
+
+    // @ts-ignore
+    const result = amqp.parseRoutingKeys('arg.routing.key')
+    expect(result, 'should use routingKeyArg').to.include('arg.routing.key')
+  })
+
+  it('parseRoutingKeys() uses config.exchange.routingKey fallback', () => {
+    amqp.config.exchange.routingKey = 'config.routing.key'
+    amqp.q = { queue: 'queue.fallback' }
+
+    // @ts-ignore
+    const result = amqp.parseRoutingKeys()
+    expect(result, 'should use config routing key').to.include('config.routing.key')
+  })
+
+  it('parseRoutingKeys() uses this.q?.queue fallback', () => {
+    amqp.config.exchange.routingKey = ''
+    amqp.q = { queue: 'queue.fallback' }
+
+    // @ts-ignore
+    const result = amqp.parseRoutingKeys()
+    expect(result, 'should use queue as fallback').to.include('queue.fallback')
+  })
+
+  it('parseRoutingKeys() splits comma-separated keys', () => {
+    // @ts-ignore
+    const result = amqp.parseRoutingKeys('key1,key2, key3')
+    expect(result, 'should split and trim keys').to.deep.equal(['key1', 'key2', 'key3'])
+  })
+
+  it('ack() calls channel.ack with correct parameters', () => {
+    const ackStub = sinon.stub()
+    amqp.channel = { ack: ackStub }
+    const msg = { manualAck: { allUpTo: true } }
+    amqp.ack(msg as any)
+    expect(ackStub.calledOnce, 'ack should be called once').to.be.true
+    expect(
+      ackStub.calledWith(msg, true),
+      'ack should be called with msg and allUpTo=true',
+    ).to.be.true
+  })
+
+  it('ack() defaults allUpTo to false when not specified', () => {
+    const ackStub = sinon.stub()
+    amqp.channel = { ack: ackStub }
+    const msg = { manualAck: {} }
+    amqp.ack(msg as any)
+    expect(ackStub.calledOnce, 'ack should be called once').to.be.true
+    expect(
+      ackStub.calledWith(msg, false),
+      'ack should be called with msg and allUpTo=false',
+    ).to.be.true
+  })
+
+  it('ack() with no manualAck property', () => {
+    const ackStub = sinon.stub()
+    amqp.channel = { ack: ackStub }
+    const msg = {}
+    amqp.ack(msg as any)
+    expect(ackStub.calledOnce, 'ack should be called once').to.be.true
+    expect(
+      ackStub.calledWith(msg, false),
+      'ack should default allUpTo to false when manualAck is missing',
+    ).to.be.true
+  })
+
+  it('ack() with allUpTo explicitly false', () => {
+    const ackStub = sinon.stub()
+    amqp.channel = { ack: ackStub }
+    const msg = { manualAck: { allUpTo: false } }
+    amqp.ack(msg as any)
+    expect(ackStub.calledOnce, 'ack should be called once').to.be.true
+    expect(
+      ackStub.calledWith(msg, false),
+      'ack should handle allUpTo=false',
+    ).to.be.true
+  })
+
+  it('ackAll() calls channel.ackAll', () => {
+    const ackAllStub = sinon.stub()
+    amqp.channel = { ackAll: ackAllStub }
+    amqp.ackAll()
+    expect(ackAllStub.calledOnce, 'ackAll should be called once').to.be.true
+  })
+
+  it('nack() calls channel.nack with allUpTo and requeue', () => {
+    const nackStub = sinon.stub()
+    amqp.channel = { nack: nackStub }
+    const msg = { manualAck: { allUpTo: true, requeue: false } }
+    amqp.nack(msg as any)
+    expect(nackStub.calledOnce, 'nack should be called once').to.be.true
+    expect(
+      nackStub.calledWith(msg, true, false),
+      'nack should be called with msg, allUpTo=true, requeue=false',
+    ).to.be.true
+  })
+
+  it('nackAll() calls channel.nackAll with requeue', () => {
+    const nackAllStub = sinon.stub()
+    amqp.channel = { nackAll: nackAllStub }
+    const msg = { manualAck: { requeue: false } }
+    amqp.nackAll(msg as any)
+    expect(nackAllStub.calledOnce, 'nackAll should be called once').to.be.true
+    expect(
+      nackAllStub.calledWith(false),
+      'nackAll should be called with requeue=false',
+    ).to.be.true
+  })
+
+  it('nackAll() defaults requeue to true when not specified', () => {
+    const nackAllStub = sinon.stub()
+    amqp.channel = { nackAll: nackAllStub }
+    const msg = { manualAck: {} }
+    amqp.nackAll(msg as any)
+    expect(nackAllStub.calledOnce, 'nackAll should be called once').to.be.true
+    expect(
+      nackAllStub.calledWith(true),
+      'nackAll should be called with requeue=true',
+    ).to.be.true
+  })
+
+  it('reject() calls channel.reject with requeue', () => {
+    const rejectStub = sinon.stub()
+    amqp.channel = { reject: rejectStub }
+    const msg = { manualAck: { requeue: false } }
+    amqp.reject(msg as any)
+    expect(rejectStub.calledOnce, 'reject should be called once').to.be.true
+    expect(
+      rejectStub.calledWith(msg, false),
+      'reject should be called with msg and requeue=false',
+    ).to.be.true
+  })
+
+  it('nack() uses allUpTo=false when allUpTo is not set', () => {
+    const nackStub = sinon.stub()
+    amqp.channel = { nack: nackStub }
+    const msg = { manualAck: { requeue: true } }
+    amqp.nack(msg as any)
+    expect(nackStub.calledOnce, 'nack should be called once').to.be.true
+    expect(
+      nackStub.calledWith(msg, false, true),
+      'nack should be called with msg, allUpTo=false (falsy), requeue=true',
+    ).to.be.true
+  })
+
+  it('nack() with no manualAck property', () => {
+    const nackStub = sinon.stub()
+    amqp.channel = { nack: nackStub }
+    const msg = {}
+    amqp.nack(msg as any)
+    expect(nackStub.calledOnce, 'nack should be called once').to.be.true
+    expect(
+      nackStub.calledWith(msg, false, true),
+      'nack should default requeue to true when manualAck is missing',
+    ).to.be.true
+  })
+
+  it('nackAll() with no manualAck property', () => {
+    const nackAllStub = sinon.stub()
+    amqp.channel = { nackAll: nackAllStub }
+    const msg = {}
+    amqp.nackAll(msg as any)
+    expect(nackAllStub.calledOnce, 'nackAll should be called once').to.be.true
+    expect(
+      nackAllStub.calledWith(true),
+      'nackAll should default requeue to true when manualAck is missing',
+    ).to.be.true
+  })
+
+  it('reject() with no manualAck property', () => {
+    const rejectStub = sinon.stub()
+    amqp.channel = { reject: rejectStub }
+    const msg = {}
+    amqp.reject(msg as any)
+    expect(rejectStub.calledOnce, 'reject should be called once').to.be.true
+    expect(
+      rejectStub.calledWith(msg, true),
+      'reject should default requeue to true when manualAck is missing',
+    ).to.be.true
+  })
+
+  it('nack() with allUpTo explicitly false', () => {
+    const nackStub = sinon.stub()
+    amqp.channel = { nack: nackStub }
+    const msg = { manualAck: { allUpTo: false, requeue: false } }
+    amqp.nack(msg as any)
+    expect(nackStub.calledOnce, 'nack should be called once').to.be.true
+    expect(
+      nackStub.calledWith(msg, false, false),
+      'nack should handle allUpTo=false and requeue=false',
+    ).to.be.true
+  })
+
+  it('nackAll() with explicit requeue=true', () => {
+    const nackAllStub = sinon.stub()
+    amqp.channel = { nackAll: nackAllStub }
+    const msg = { manualAck: { requeue: true } }
+    amqp.nackAll(msg as any)
+    expect(nackAllStub.calledOnce, 'nackAll should be called once').to.be.true
+    expect(
+      nackAllStub.calledWith(true),
+      'nackAll should be called with requeue=true',
+    ).to.be.true
+  })
+
+  it('reject() with requeue=true', () => {
+    const rejectStub = sinon.stub()
+    amqp.channel = { reject: rejectStub }
+    const msg = { manualAck: { requeue: true } }
+    amqp.reject(msg as any)
+    expect(rejectStub.calledOnce, 'reject should be called once').to.be.true
+    expect(
+      rejectStub.calledWith(msg, true),
+      'reject should be called with msg and requeue=true',
+    ).to.be.true
+  })
+
+  it('reject() defaults requeue to true when not specified', () => {
+    const rejectStub = sinon.stub()
+    amqp.channel = { reject: rejectStub }
+    const msg = { manualAck: {} }
+    amqp.reject(msg as any)
+    expect(rejectStub.calledOnce, 'reject should be called once').to.be.true
+    expect(
+      rejectStub.calledWith(msg, true),
+      'reject should be called with msg and requeue=true (default)',
+    ).to.be.true
+  })
+
+  it('close() skips unbindQueue when autoDelete is false', async () => {
+    const unbindQueueStub = sinon.stub()
+    const channelCloseStub = sinon.stub().resolves()
+    const connectionCloseStub = sinon.stub().resolves()
+
+    amqp.channel = {
+      unbindQueue: unbindQueueStub,
+      close: channelCloseStub,
+    }
+    amqp.connection = { close: connectionCloseStub }
+    amqp.config.queue.name = 'queueName'
+    amqp.config.queue.autoDelete = false  // This skips the unbind
+
+    await amqp.close()
+
+    expect(
+      unbindQueueStub.called,
+      'unbindQueue should NOT be called when autoDelete is false',
+    ).to.be.false
+    expect(channelCloseStub.calledOnce, 'channel close should be called').to.be.true
+    expect(connectionCloseStub.calledOnce, 'connection close should be called').to.be
+      .true
+  })
+
+  it('close() skips unbindQueue when exchange name is empty', async () => {
+    const unbindQueueStub = sinon.stub()
+    const channelCloseStub = sinon.stub().resolves()
+    const connectionCloseStub = sinon.stub().resolves()
+
+    amqp.channel = {
+      unbindQueue: unbindQueueStub,
+      close: channelCloseStub,
+    }
+    amqp.connection = { close: connectionCloseStub }
+    amqp.config.exchange.name = ''  // Empty exchange name
+    amqp.config.queue.name = 'queueName'
+    amqp.config.queue.autoDelete = true
+
+    await amqp.close()
+
+    expect(
+      unbindQueueStub.called,
+      'unbindQueue should NOT be called when exchange name is empty',
+    ).to.be.false
+    expect(channelCloseStub.calledOnce, 'channel close should be called').to.be.true
+  })
+
+  it('close() skips unbindQueue when queue name is empty', async () => {
+    const { exchangeName } = nodeConfigFixture
+    const unbindQueueStub = sinon.stub()
+    const channelCloseStub = sinon.stub().resolves()
+    const connectionCloseStub = sinon.stub().resolves()
+
+    amqp.channel = {
+      unbindQueue: unbindQueueStub,
+      close: channelCloseStub,
+    }
+    amqp.connection = { close: connectionCloseStub }
+    amqp.config.exchange.name = exchangeName
+    amqp.config.queue.name = ''  // Empty queue name
+    amqp.config.queue.autoDelete = true
+
+    await amqp.close()
+
+    expect(
+      unbindQueueStub.called,
+      'unbindQueue should NOT be called when queue name is empty',
+    ).to.be.false
+    expect(channelCloseStub.calledOnce, 'channel close should be called').to.be.true
+  })
+
+  it('close() handles unbindQueue error gracefully', async () => {
+    const { exchangeName, exchangeRoutingKey } = nodeConfigFixture
+    const queueName = 'queueName'
+
+    const unbindQueueStub = sinon.stub().rejects(new Error('Unbind failed'))
+    const channelCloseStub = sinon.stub().resolves()
+    const connectionCloseStub = sinon.stub().resolves()
+    const consoleErrorStub = sinon.stub(console, 'error')
+
+    amqp.channel = {
+      unbindQueue: unbindQueueStub,
+      close: channelCloseStub,
+    }
+    amqp.connection = { close: connectionCloseStub }
+    amqp.config.queue.name = queueName
+    amqp.config.queue.autoDelete = true
+
+    await amqp.close()
+
+    expect(
+      consoleErrorStub.calledOnce,
+      'console.error should be called when unbindQueue fails',
+    ).to.be.true
+    expect(
+      channelCloseStub.calledOnce,
+      'channel close should still be called',
+    ).to.be.true
+    expect(
+      connectionCloseStub.calledOnce,
+      'connection close should still be called',
+    ).to.be.true
+
+    consoleErrorStub.restore()
+  })
+
+  it('createChannel() registers channel error event listener', async () => {
+    const result = {
+      on: sinon.stub().returns(null),
+      prefetch: (): null => null,
+    }
+    const createChannelStub = sinon.stub().returns(result)
+    amqp.connection = { createChannel: createChannelStub }
+    amqp.node = {
+      status: sinon.stub(),
+      error: sinon.stub(),
+    }
+
+    await amqp.createChannel()
+
+    expect(
+      result.on.called,
+      'channel error listener should be registered',
+    ).to.be.true
+    expect(
+      result.on.calledWith('error'),
+      'should register error event listener',
+    ).to.be.true
   })
 })

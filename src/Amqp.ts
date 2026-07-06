@@ -147,9 +147,15 @@ export default class Amqp {
     msg: unknown,
     properties?: MessageProperties,
   ): Promise<void> {
-    this.parseRoutingKeys().forEach(async routingKey => {
-      this.handlePublish(this.config, msg, properties, routingKey)
-    })
+    try {
+      await Promise.all(
+        this.parseRoutingKeys().map(routingKey =>
+          this.handlePublish(this.config, msg, properties, routingKey),
+        ),
+      )
+    } catch (e) {
+      this.node.error(`Could not publish message: ${e}`, msg)
+    }
   }
 
   private async handlePublish(
@@ -184,6 +190,11 @@ export default class Amqp {
         ...this.config.amqpProperties,
         ...properties,
       }
+
+      if (!this.channel || typeof this.channel.publish !== 'function') {
+        throw new Error('AMQP channel unavailable (disconnected or reconnecting)')
+      }
+
       // when the name field is empty, publish just like the sendToQueue method;
       // see https://amqp-node.github.io/amqplib/channel_api.html#channel_publish
       this.channel.publish(
@@ -193,7 +204,7 @@ export default class Amqp {
         options,
       )
     } catch (e) {
-      this.node.error(`Could not publish message: ${e}`)
+      throw new Error(`Could not publish message: ${e}`)
     }
   }
 
@@ -382,7 +393,7 @@ export default class Amqp {
         ? this.getCredsFromSettings()
         : credentials
 
-      const protocol = tls ? /* istanbul ignore next */ 'amqps' : 'amqp'
+      const protocol = tls ? 'amqps' : 'amqp'
       url = `${protocol}://${encodeURIComponent(username)}:${encodeURIComponent(
         password,
       )}@${host}:${port}/${vhost}`

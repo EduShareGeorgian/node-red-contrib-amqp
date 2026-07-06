@@ -35,38 +35,39 @@ module.exports = function (RED: NodeRedApp): void {
 
     // handle input event;
     const inputListener = async (msg, _, done) => {
-      const { payload, routingKey, properties: msgProperties } = msg
-      const {
-        exchangeRoutingKey,
-        exchangeRoutingKeyType,
-        amqpProperties,
-      } = config
-
-      // message properties override config properties
-      let properties: MessageProperties
       try {
-        properties = {
-          ...JSON.parse(amqpProperties),
-          ...msgProperties,
-        }
-      } catch (e) {
-        properties = msgProperties
-      }
+        const { payload, routingKey, properties: msgProperties } = msg
+        const {
+          exchangeRoutingKey,
+          exchangeRoutingKeyType,
+          amqpProperties,
+        } = config
 
-      switch (exchangeRoutingKeyType) {
-        case 'msg':
-        case 'flow':
-        case 'global':
-          amqp.setRoutingKey(
-            RED.util.evaluateNodeProperty(
-              exchangeRoutingKey,
-              exchangeRoutingKeyType,
-              this,
-              msg,
-            ),
-          )
-          break
-        case 'jsonata':         
+        // message properties override config properties
+        let properties: MessageProperties
+        try {
+          properties = {
+            ...JSON.parse(amqpProperties),
+            ...msgProperties,
+          }
+        } catch (e) {
+          properties = msgProperties
+        }
+
+        switch (exchangeRoutingKeyType) {
+          case 'msg':
+          case 'flow':
+          case 'global':
+            amqp.setRoutingKey(
+              RED.util.evaluateNodeProperty(
+                exchangeRoutingKey,
+                exchangeRoutingKeyType,
+                this,
+                msg,
+              ),
+            )
+            break
+          case 'jsonata':
             function evaluateJSONataasPromise(exchangeRoutingKey: any, msg: any, amqp: any): Promise<void> {
               return new Promise((resolve, reject) => {
                 RED.util.evaluateJSONataExpression(
@@ -74,37 +75,44 @@ module.exports = function (RED: NodeRedApp): void {
                   msg,
                   function (er, val) {
                     if (er) {
-                      reject(er);
+                      reject(er)
                     } else {
-                      amqp.setRoutingKey(val);
-                      resolve();
+                      amqp.setRoutingKey(val)
+                      resolve()
                     }
-                  }
-                );
-              });
+                  },
+                )
+              })
             }
-            await evaluateJSONataasPromise(exchangeRoutingKey, msg, amqp);        
-          break
-        case 'str':
-        default:
-          if (routingKey) {
-            // if incoming payload contains a routingKey value
-            // override our string value with it.
+            await evaluateJSONataasPromise(exchangeRoutingKey, msg, amqp)
+            break
+          case 'str':
+          default:
+            if (routingKey) {
+              // if incoming payload contains a routingKey value
+              // override our string value with it.
 
-            // Superfluous (and possibly confusing) at this point
-            // but keeping it to retain backwards compatibility
-            amqp.setRoutingKey(routingKey)
-          }
-          break
+              // Superfluous (and possibly confusing) at this point
+              // but keeping it to retain backwards compatibility
+              amqp.setRoutingKey(routingKey)
+            }
+            break
+        }
+
+        if (!!properties?.headers?.doNotStringifyPayload) {
+          await amqp.publish(payload, properties)
+        } else {
+          await amqp.publish(JSON.stringify(payload), properties)
+        }
+
+        done && done()
+      } catch (e) {
+        if (done) {
+          done(e)
+        } else {
+          this.error(e, msg)
+        }
       }
-
-      if (!!properties?.headers?.doNotStringifyPayload) {
-        amqp.publish(payload, properties)
-      } else {
-        amqp.publish(JSON.stringify(payload), properties)
-      }
-
-      done && done()
     }
 
     this.on('input', inputListener)
@@ -116,27 +124,26 @@ module.exports = function (RED: NodeRedApp): void {
 
     async function initializeNode(nodeIns) {
       reconnect = async () => {
-        try{
-        // check the channel and clear all the event listener        
-        if (channel && channel.removeAllListeners) {
-          channel.removeAllListeners()        
-          if(connection.channel.status === 'open') {
-            connection.close();
+        try {
+          // check the channel and clear all the event listeners
+          if (channel && channel.removeAllListeners) {
+            channel.removeAllListeners()
+            channel = null
           }
-          channel = null;
-        }
 
-        // check the connection and clear all the event listener
-        if (connection && connection.removeAllListeners) {
-          connection.removeAllListeners()
-          if(connection.channel.status === 'open') {
-            connection.close();
-          }          
-          connection = null;
+          // check the connection and clear all the event listeners
+          if (connection && connection.removeAllListeners) {
+            connection.removeAllListeners()
+            try {
+              await connection.close()
+            } catch (e) {
+              // ignore — connection may already be closed/errored
+            }
+            connection = null
+          }
+        } catch (e) {
+          // ignore cleanup errors
         }
-      }
-      catch(e){
-      }
         // always clear timer before set it;
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(() => {
@@ -149,15 +156,15 @@ module.exports = function (RED: NodeRedApp): void {
       }
   
       try {
-        const connection = await amqp.connect()
+        connection = await amqp.connect()
 
         // istanbul ignore else
         if (connection) {
           channel = await amqp.initialize()
 
           // When the server goes down
-          connection.on('close', async e => {
-            e && (await reconnect())
+          connection.on('close', async () => {
+            await reconnect()
           })
           
           // When the connection goes down

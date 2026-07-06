@@ -1,0 +1,187 @@
+[
+  {
+    "id": "f4b1b8a2b4cb6f01",
+    "type": "tab",
+    "label": "AMQP Out Reconnect Verification",
+    "disabled": false,
+    "info": ""
+  },
+  {
+    "id": "a7fe2d3b5c8b4101",
+    "type": "comment",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "How To Verify",
+    "info": "1) Configure the AMQP broker node and deploy.\\n2) Start broker and watch the status debug report connected.\\n3) Stop broker while inject keeps sending; catch debug should show publish errors.\\n4) Start broker again; status debug should return to connected and consumer debug should resume receiving messages.",
+    "x": 150,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "b2de6fa3c9e14710",
+    "type": "inject",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "Publish heartbeat every 2s",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "2",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "1",
+    "topic": "",
+    "payload": "{\"event\":\"heartbeat\",\"ts\":$millis()}",
+    "payloadType": "jsonata",
+    "x": 190,
+    "y": 160,
+    "wires": [
+      [
+        "d3a1f8c6e7b4422a"
+      ]
+    ]
+  },
+  {
+    "id": "d3a1f8c6e7b4422a",
+    "type": "amqp-out",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "amqp-out (reconnectOnError=true)",
+    "broker": "bb18e5a190cc42b4",
+    "reconnectOnError": true,
+    "exchangeName": "amq.topic",
+    "exchangeType": "topic",
+    "exchangeRoutingKey": "reconnect.verify",
+    "exchangeRoutingKeyType": "str",
+    "exchangeDurable": true,
+    "amqpProperties": "{\"headers\":{},\"appId\":\"reconnect-test\"}",
+    "rpcTimeoutMilliseconds": "3000",
+    "outputs": 0,
+    "x": 510,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "f0c3a29e541f45d7",
+    "type": "catch",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "Catch amqp-out errors",
+    "scope": [
+      "d3a1f8c6e7b4422a"
+    ],
+    "uncaught": false,
+    "x": 180,
+    "y": 240,
+    "wires": [
+      [
+        "f62e6d1e4b9f4925"
+      ]
+    ]
+  },
+  {
+    "id": "f62e6d1e4b9f4925",
+    "type": "debug",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "Catch output (publish/connect errors)",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 520,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "ab3c1f0e53ca49da",
+    "type": "status",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "Status of amqp-out",
+    "scope": [
+      "d3a1f8c6e7b4422a"
+    ],
+    "x": 170,
+    "y": 320,
+    "wires": [
+      [
+        "da95bbeb2d6f4f6b"
+      ]
+    ]
+  },
+  {
+    "id": "da95bbeb2d6f4f6b",
+    "type": "debug",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "Status output (connected/disconnected)",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 530,
+    "y": 320,
+    "wires": []
+  },
+  {
+    "id": "ceaf2c6e46214cf1",
+    "type": "amqp-in",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "amqp-in observer",
+    "broker": "bb18e5a190cc42b4",
+    "prefetch": 0,
+    "reconnectOnError": true,
+    "noAck": true,
+    "exchangeName": "amq.topic",
+    "exchangeType": "topic",
+    "exchangeRoutingKey": "reconnect.verify",
+    "exchangeDurable": true,
+    "queueName": "",
+    "queueExclusive": false,
+    "queueDurable": false,
+    "queueAutoDelete": true,
+    "headers": "{}",
+    "x": 190,
+    "y": 400,
+    "wires": [
+      [
+        "d8d01c7d4bd34a5f"
+      ]
+    ]
+  },
+  {
+    "id": "d8d01c7d4bd34a5f",
+    "type": "debug",
+    "z": "f4b1b8a2b4cb6f01",
+    "name": "Consumer output (recovery proof)",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 520,
+    "y": 400,
+    "wires": []
+  },
+  {
+    "id": "bb18e5a190cc42b4",
+    "type": "amqp-broker",
+    "name": "Local RabbitMQ",
+    "host": "localhost",
+    "port": "5672",
+    "vhost": "/",
+    "tls": false,
+    "credsFromSettings": false
+  }
+]

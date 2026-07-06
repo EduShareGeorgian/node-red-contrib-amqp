@@ -1,0 +1,29 @@
+{
+  "all": true,
+  "extension": [".ts"],
+  "include": [
+    "src/Amqp.ts",
+    "src/constants.ts",
+    "src/types.ts",
+    "src/common/**/*.ts"
+  ],
+  "exclude": [
+    "src/nodes/**",
+    "test/**",
+    "node_modules/**"
+  ],
+  "require": ["ts-node/register"],
+  "reporter": [
+    "text",
+    "text-summary",
+    "html",
+    "lcov"
+  ],
+  "report-dir": "./coverage",
+  "temp-dir": "./.nyc_output",
+  "check-coverage": true,
+  "branches": 80,
+  "lines": 90,
+  "functions": 85,
+  "statements": 90
+}

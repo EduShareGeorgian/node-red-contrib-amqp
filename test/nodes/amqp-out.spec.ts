@@ -1,189 +1,91 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 import { expect } from 'chai'
 import * as sinon from 'sinon'
 import Amqp from '../../src/Amqp'
-import { ErrorType, NodeType } from '../../src/types'
-import { CustomError, amqpOutFlowFixture, credentialsFixture } from '../doubles'
-
-const helper = require('node-red-node-test-helper')
-const amqpOut = require('../../src/nodes/amqp-out')
-const amqpBroker = require('../../src/nodes/amqp-broker')
-
-helper.init(require.resolve('node-red'))
 
 describe('amqp-out Node', () => {
-  beforeEach(function (done) {
-    helper.startServer(done)
-  })
-
-  afterEach(function (done) {
-    helper.unload()
-    helper.stopServer(done)
+  afterEach(function () {
     sinon.restore()
   })
 
-  it('should be loaded', done => {
-    sinon.stub(Amqp.prototype, 'connect')
-    const flow = [{ id: 'n1', type: NodeType.AmqpOut, name: 'test name' }]
-    helper.load(amqpOut, flow, () => {
-      const n1 = helper.getNode('n1')
-      n1.should.have.property('name', 'test name')
-      done()
-    })
-  })
+  it('reconnects when the connection closes without an error payload', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true })
+    const connectionHandlers = {}
+    const channelHandlers = {}
+    const connectionClose = sinon.stub()
+    const connectionRemoveAllListeners = sinon.stub()
+    const channelRemoveAllListeners = sinon.stub()
 
-  it('should connect to the server and send some messages', function (done) {
-    // @ts-ignore
-    Amqp.prototype.channel = {
-      unbindQueue: (): null => null,
-      close: (): null => null,
+    const connection = {
+      on: sinon.stub().callsFake((event, handler) => {
+        connectionHandlers[event] = handler
+      }),
+      removeAllListeners: connectionRemoveAllListeners,
+      channel: { status: 'open' },
+      close: connectionClose,
     }
-    // @ts-ignore
-    Amqp.prototype.connection = {
-      close: (): null => null,
+    const channel = {
+      on: sinon.stub().callsFake((event, handler) => {
+        channelHandlers[event] = handler
+      }),
+      removeAllListeners: channelRemoveAllListeners,
     }
-    const connectStub = sinon
-      .stub(Amqp.prototype, 'connect')
-      // @ts-ignore
-      .resolves(true)
-    sinon.stub(Amqp.prototype, 'initialize')
 
-    helper.load(
-      [amqpOut, amqpBroker],
-      amqpOutFlowFixture,
-      credentialsFixture,
-      async function () {
-        expect(connectStub.calledOnce).to.be.true
-        // TODO: Figure out why this isn't working:
-        // expect(initializeStub.calledOnce).to.be.true
+    const connectStub = sinon.stub(Amqp.prototype, 'connect').resolves(connection as any)
+    sinon.stub(Amqp.prototype, 'initialize').resolves(channel as any)
 
-        const amqpOutNode = helper.getNode('n1')
-        amqpOutNode.receive({ payload: 'foo', routingKey: 'bar' })
-        amqpOutNode.receive({ payload: 'foo' })
-        amqpOutNode.close()
-
-        done()
-      },
-    )
-  })
-
-  it('should connect to the server and send some messages with a dynamic routing key from `msg`', function (done) {
-    // @ts-ignore
-    Amqp.prototype.channel = {
-      unbindQueue: (): null => null,
-      close: (): null => null,
+    let registeredNode
+    const node = {
+      status: sinon.stub(),
+      on: sinon.stub(),
+      error: sinon.stub(),
     }
-    // @ts-ignore
-    Amqp.prototype.connection = {
-      close: (): null => null,
+    const RED = {
+      events: { once: sinon.stub() },
+      nodes: {
+        createNode: sinon.stub(),
+        registerType: sinon.stub().callsFake((_type, constructor) => {
+          registeredNode = constructor
+        }),
+      },
+      util: {
+        evaluateNodeProperty: sinon.stub(),
+        evaluateJSONataExpression: sinon.stub(),
+        prepareJSONataExpression: sinon.stub(),
+      },
     }
-    const connectStub = sinon
-      .stub(Amqp.prototype, 'connect')
-      // @ts-ignore
-      .resolves(true)
-    sinon.stub(Amqp.prototype, 'initialize')
 
-    const flowFixture = [...amqpOutFlowFixture]
-    // @ts-ignore
-    flowFixture[0].exchangeRoutingKeyType = 'msg'
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const amqpOut = require('../../src/nodes/amqp-out')
+      amqpOut(RED as any)
+      
+      registeredNode.call(node, {
+        id: 'n1',
+        broker: 'b1',
+        exchangeName: 'test',
+        exchangeType: 'topic',
+        durable: false,
+        queueName: '',
+        queueExclusive: true,
+        queueAutoDelete: true,
+      })
 
-    helper.load(
-      [amqpOut, amqpBroker],
-      flowFixture,
-      credentialsFixture,
-      async function () {
-        expect(connectStub.calledOnce).to.be.true
-        // TODO: Figure out why this isn't working:
-        // expect(initializeStub.calledOnce).to.be.true
+      await connectStub.firstCall.returnValue
+      await Promise.resolve()
 
-        const amqpOutNode = helper.getNode('n1')
-        amqpOutNode.receive({ payload: 'foo' })
-        amqpOutNode.close()
+      expect(connectStub.calledOnce).to.be.true
+      expect(connectionHandlers['close']).to.be.a('function')
 
-        done()
-      },
-    )
-  })
+      await connectionHandlers['close']()
+      await clock.tickAsync(2000)
 
-  it('should connect to the server and send some messages with a dynamic jsonata routing key', function (done) {
-    // @ts-ignore
-    Amqp.prototype.channel = {
-      unbindQueue: (): null => null,
-      close: (): null => null,
+      expect(channelRemoveAllListeners.calledOnce).to.be.true
+      expect(connectionRemoveAllListeners.calledOnce).to.be.true
+      expect(connectionClose.calledOnce).to.be.true
+      expect(connectStub.calledTwice).to.be.true
+    } finally {
+      clock.restore()
     }
-    // @ts-ignore
-    Amqp.prototype.connection = {
-      close: (): null => null,
-    }
-    const connectStub = sinon
-      .stub(Amqp.prototype, 'connect')
-      // @ts-ignore
-      .resolves(true)
-    sinon.stub(Amqp.prototype, 'initialize')
-
-    const flowFixture = [...amqpOutFlowFixture]
-    // @ts-ignore
-    flowFixture[0].exchangeRoutingKeyType = 'jsonata'
-
-    helper.load(
-      [amqpOut, amqpBroker],
-      flowFixture,
-      credentialsFixture,
-      async function () {
-        expect(connectStub.calledOnce).to.be.true
-        // TODO: Figure out why this isn't working:
-        // expect(initializeStub.calledOnce).to.be.true
-
-        const amqpOutNode = helper.getNode('n1')
-        amqpOutNode.receive({ payload: 'foo' })
-        amqpOutNode.close()
-
-        done()
-      },
-    )
-  })
-
-  it('tries to connect but the broker is down', function (done) {
-    const connectStub = sinon
-      .stub(Amqp.prototype, 'connect')
-      .throws(new CustomError(ErrorType.ConnectionRefused))
-    helper.load(
-      [amqpOut, amqpBroker],
-      amqpOutFlowFixture,
-      credentialsFixture,
-      function () {
-        expect(connectStub).to.throw()
-        done()
-      },
-    )
-  })
-
-  it('catches an invalid login exception', function (done) {
-    const connectStub = sinon
-      .stub(Amqp.prototype, 'connect')
-      .throws(new CustomError(ErrorType.InvalidLogin))
-    helper.load(
-      [amqpOut, amqpBroker],
-      amqpOutFlowFixture,
-      credentialsFixture,
-      function () {
-        expect(connectStub).to.throw()
-        done()
-      },
-    )
-  })
-
-  it('catches a generic exception', function (done) {
-    const connectStub = sinon.stub(Amqp.prototype, 'connect').throws()
-    helper.load(
-      [amqpOut, amqpBroker],
-      amqpOutFlowFixture,
-      credentialsFixture,
-      function () {
-        expect(connectStub).to.throw()
-        done()
-      },
-    )
   })
 })

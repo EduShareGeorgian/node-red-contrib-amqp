@@ -85,8 +85,8 @@ module.exports = function (RED: NodeRedApp): void {
           await amqp.consume()
 
           // When the connection goes down
-          connection.on('close', async e => {
-            e && (await reconnect())
+          connection.on('close', async () => {
+            await reconnect()
           })
 
           // When the connection goes down

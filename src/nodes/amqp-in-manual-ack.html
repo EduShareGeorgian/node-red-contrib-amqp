@@ -1,10 +1,22 @@
 <script type="text/javascript">
+  function isValidBrokerReference(value) {
+    if (!value) {
+      return false
+    }
+
+    if (/^\$\{[^}]+\}$/.test(value)) {
+      return true
+    }
+
+    return !!RED.nodes.node(value)
+  }
+
   RED.nodes.registerType('amqp-in-manual-ack', {
     category: 'AMQP',
     color: '#D1649C',
     defaults: {
       name: { value: '' },
-      broker: { value: '', type: 'amqp-broker' },
+      broker: { value: '', type: 'amqp-broker', validate: isValidBrokerReference },
       prefetch: { value: 0 },
       reconnectOnError: { value: true },
       noAck: { value: false },

@@ -1,0 +1,21 @@
+[
+    {
+        "id": "762970f103eff794",
+        "type": "queue",
+        "z": "c1f64d365395298f",
+        "name": "out queue",
+        "connected": "Connected",
+        "connectedType": "str",
+        "disconnected": "Disconnected.*",
+        "disconnectedType": "re",
+        "sqlite": "${NR_NODE_ID}",
+        "filesize": "",
+        "x": 415,
+        "y": 76.11111111111109,
+        "wires": [
+            [
+                "344af66bacebb3f2"
+            ]
+        ]
+    }
+]

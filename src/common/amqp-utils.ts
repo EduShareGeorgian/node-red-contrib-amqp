@@ -14,6 +14,7 @@ export async function handleAck(msg: any, amqp: any) {
 				break;
 			case 'Reject':
 				amqp.reject(msg);
+				break;
 			case 'Close':
 				await amqp.close();
 				return;

@@ -12,8 +12,9 @@ describe('amqp-out Node', () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true })
     const connectionHandlers = {}
     const channelHandlers = {}
-    const connectionClose = sinon.stub()
+    const connectionClose = sinon.stub().resolves()
     const connectionRemoveAllListeners = sinon.stub()
+    const channelClose = sinon.stub().resolves()
     const channelRemoveAllListeners = sinon.stub()
 
     const connection = {
@@ -28,6 +29,7 @@ describe('amqp-out Node', () => {
       on: sinon.stub().callsFake((event, handler) => {
         channelHandlers[event] = handler
       }),
+      close: channelClose,
       removeAllListeners: channelRemoveAllListeners,
     }
 
@@ -38,6 +40,7 @@ describe('amqp-out Node', () => {
     const node = {
       status: sinon.stub(),
       on: sinon.stub(),
+      log: sinon.stub(),
       error: sinon.stub(),
     }
     const RED = {
@@ -81,6 +84,7 @@ describe('amqp-out Node', () => {
       await clock.tickAsync(2000)
 
       expect(channelRemoveAllListeners.calledOnce).to.be.true
+      expect(channelClose.calledOnce).to.be.true
       expect(connectionRemoveAllListeners.calledOnce).to.be.true
       expect(connectionClose.calledOnce).to.be.true
       expect(connectStub.calledTwice).to.be.true
@@ -88,4 +92,5 @@ describe('amqp-out Node', () => {
       clock.restore()
     }
   })
+
 })

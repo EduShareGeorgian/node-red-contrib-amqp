@@ -1,6 +1,6 @@
-import { NodeRedApp } from 'node-red'
+import { NodeAPI } from 'node-red'
 
-module.exports = function (RED: NodeRedApp): void {
+module.exports = function (RED: NodeAPI): void {
   function AmqpBroker(n): void {
     // wtf happened to the types?
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment

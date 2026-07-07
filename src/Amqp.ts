@@ -1,4 +1,4 @@
-import { NodeRedApp, Node } from 'node-red'
+import { NodeAPI, Node, NodeMessage } from 'node-red'
 import { v4 as uuidv4 } from 'uuid'
 import cloneDeep = require('lodash.clonedeep')
 import {
@@ -24,12 +24,12 @@ import { NODE_STATUS } from './constants'
 export default class Amqp {
   private config: AmqpConfig
   private broker: Node
-  private connection: Connection
+  private connection: Awaited<ReturnType<typeof connect>>
   private channel: Channel
   private q: Replies.AssertQueue
 
   constructor(
-    private readonly RED: NodeRedApp,
+    private readonly RED: NodeAPI,
     private readonly node: Node,
     config: AmqpInNodeDefaults & AmqpOutNodeDefaults,
   ) {
@@ -60,7 +60,7 @@ export default class Amqp {
     }
   }
 
-  public async connect(): Promise<Connection> {
+  public async connect(): Promise<Awaited<ReturnType<typeof connect>>> {
     const { broker } = this.config
 
     // wtf happened to the types?
@@ -69,26 +69,33 @@ export default class Amqp {
     this.broker = this.RED.nodes.getNode(broker)
 
     const brokerUrl = this.getBrokerUrl(this.broker)
+    this.node.log(`AMQP state: connecting to ${brokerUrl}`)
     this.connection = await connect(brokerUrl, { heartbeat: 2 })
 
     /* istanbul ignore next */
     this.connection.on('error', (e): void => {
       // Set node to disconnected status
       this.node.status(NODE_STATUS.Disconnected)
+      this.node.log(`AMQP state: connection error -> disconnected`)
     })
 
     /* istanbul ignore next */
     this.connection.on('close', () => {
       this.node.status(NODE_STATUS.Disconnected)
-      this.node.log(`AMQP Connection closed`);
+      this.node.log(`AMQP state: connection closed -> disconnected`)
+      this.node.log(`AMQP Connection closed`)
     })
+
+    this.node.log(`AMQP state: connection established`)
 
     return this.connection
   }
 
   public async initialize(): Promise<Channel> {
+    this.node.log(`AMQP state: creating channel`)
     await this.createChannel()
     await this.assertExchange()
+    this.node.log(`AMQP state: channel ready`)
     return this.channel;
   }
 
@@ -154,7 +161,10 @@ export default class Amqp {
         ),
       )
     } catch (e) {
-      this.node.error(`Could not publish message: ${e}`, msg)
+      this.node.error(
+        `Could not publish message: ${e}`,
+        typeof msg === 'object' && msg !== null ? (msg as NodeMessage) : undefined,
+      )
     }
   }
 
@@ -294,6 +304,7 @@ export default class Amqp {
     } = this.config
 
     try {
+      this.node.log(`AMQP state: closing client`)
       /* istanbul ignore else */
       if (exchangeName && queueName && queueAutoDelete) {
         const routingKeys = this.parseRoutingKeys()
@@ -312,6 +323,7 @@ export default class Amqp {
       }
       await this.channel.close()
       await this.connection.close()
+      this.node.log(`AMQP state: client closed`)
     } catch (e) { } // Need to catch here but nothing further is necessary
   }
 

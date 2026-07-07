@@ -73,10 +73,20 @@ describe('amqp-utils', () => {
       const amqpMock = { close: closeSpy, ack: sinon.stub() }
       const msg = { payload: 'test', manualAck: { ackMode: 'Close' } }
 
-      await handleAck(msg, amqpMock)
+      const closeRequested = await handleAck(msg, amqpMock)
 
       expect(closeSpy.calledOnce, 'close should be called for Close mode').to.be.true
       expect(amqpMock.ack.calledOnce, 'ack should not be called after close').to.be.false
+      expect(closeRequested, 'Close mode should signal a deliberate close').to.be.true
+    })
+
+    it('does not signal close for regular ack modes', async () => {
+      const amqpMock = { ack: sinon.stub() }
+      const msg = { payload: 'test', manualAck: { ackMode: 'Ack' } }
+
+      const closeRequested = await handleAck(msg, amqpMock)
+
+      expect(closeRequested, 'Ack mode should not signal a deliberate close').to.be.false
     })
   })
 

@@ -1,4 +1,4 @@
-export async function handleAck(msg: any, amqp: any) {
+export async function handleAck(msg: any, amqp: any): Promise<boolean> {
 	// If manualAck instructions are given, perform the corresponding action. Otherwise, do a default ack.
 	if (msg.manualAck) {
 		const ackMode = msg.manualAck.ackMode;
@@ -17,7 +17,7 @@ export async function handleAck(msg: any, amqp: any) {
 				break;
 			case 'Close':
 				await amqp.close();
-				return;
+				return true;
 			case 'Ack':
 			default:
 				amqp.ack(msg);
@@ -26,9 +26,15 @@ export async function handleAck(msg: any, amqp: any) {
 	} else {
 		amqp.ack(msg);
 	}
+
+	return false;
 }
 
-export async function processReconnect(msg: any, reconnect: any, done: Function) {
+export async function processReconnect(
+	msg: any,
+	reconnect: (() => Promise<void>) | null,
+	done?: (err?: any) => void,
+) {
     // Call reconnect if the message payload has reconnectCall set.
     if (msg.payload && msg.payload.reconnectCall && typeof reconnect === 'function') {
         await reconnect();

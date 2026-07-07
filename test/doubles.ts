@@ -101,6 +101,7 @@ export const nodeConfigFixture: AmqpInNodeDefaults & AmqpOutNodeDefaults = {
 
 export const nodeFixture = {
   status: (): null => null,
+  log: (): null => null,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

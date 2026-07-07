@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ConsumeMessage, MessageProperties } from 'amqplib'
+import { Node, NodeMessage } from 'node-red'
 
 export interface BrokerConfig extends Node {
   host: string
@@ -69,7 +70,7 @@ export interface AmqpOutNodeDefaults {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type GenericJsonObject = Record<string, any>
 
-export type AssembledMessage = ConsumeMessage & {
+export type AssembledMessage = ConsumeMessage & NodeMessage & {
   payload: GenericJsonObject | string
   manualAck?: ManualAckFields
 }

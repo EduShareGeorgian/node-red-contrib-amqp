@@ -49,12 +49,14 @@ module.exports = function (RED: NodeRedApp): void {
 
     async function initializeNode(nodeIns) {
       reconnect = async () => {
-        try{
+        try {
         // check the channel and clear all the event listener
         if (channel && channel.removeAllListeners) {
           channel.removeAllListeners()
-          if(connection.channel.status === 'open') {
-            connection.close();
+          try {
+            await channel.close()
+          } catch (_e) {
+            // ignore channel close errors during reconnect cleanup
           }
           channel = null;
         }
@@ -62,13 +64,15 @@ module.exports = function (RED: NodeRedApp): void {
         // check the connection and clear all the event listener
         if (connection && connection.removeAllListeners) {
           connection.removeAllListeners()
-          if(connection.channel.status === 'open') {
-            connection.close();
+          try {
+            await connection.close()
+          } catch (_e) {
+            // ignore connection close errors during reconnect cleanup
           }
           connection = null;
         }
       }
-      catch(e){}
+      catch (_e) {}
         // always clear timer before set it;
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(() => {

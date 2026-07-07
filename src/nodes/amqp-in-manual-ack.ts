@@ -50,18 +50,30 @@ module.exports = function (RED: NodeRedApp): void {
 
     async function initializeNode(nodeIns) {
       reconnect = async () => {
-        // check the channel and clear all the event listener
-        if (channel && channel.removeAllListeners) {
-          channel.removeAllListeners()
-          channel.close();
-          channel = null;
-        }
+        try {
+          // check the channel and clear all the event listener
+          if (channel && channel.removeAllListeners) {
+            channel.removeAllListeners()
+            try {
+              await channel.close()
+            } catch (_e) {
+              // ignore channel close errors during reconnect cleanup
+            }
+            channel = null;
+          }
 
-        // check the connection and clear all the event listener
-        if (connection && connection.removeAllListeners) {
-          connection.removeAllListeners()
-          connection.close();
-          connection = null;
+          // check the connection and clear all the event listener
+          if (connection && connection.removeAllListeners) {
+            connection.removeAllListeners()
+            try {
+              await connection.close()
+            } catch (_e) {
+              // ignore connection close errors during reconnect cleanup
+            }
+            connection = null;
+          }
+        } catch (_e) {
+          // ignore cleanup errors
         }
 
         // always clear timer before set it;
@@ -77,11 +89,11 @@ module.exports = function (RED: NodeRedApp): void {
 
 
       try {
-        const connection = await amqp.connect()
+        connection = await amqp.connect()
 
         // istanbul ignore else
         if (connection) {
-          const channel = await amqp.initialize()
+          channel = await amqp.initialize()
           await amqp.consume()
 
           // When the connection goes down

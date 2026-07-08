@@ -5,10 +5,10 @@
     "src/Amqp.ts",
     "src/constants.ts",
     "src/types.ts",
-    "src/common/**/*.ts"
+    "src/common/**/*.ts",
+    "src/nodes/**/*.ts"
   ],
   "exclude": [
-    "src/nodes/**",
     "test/**",
     "node_modules/**"
   ],
@@ -24,6 +24,6 @@
   "check-coverage": true,
   "branches": 80,
   "lines": 90,
-  "functions": 85,
+  "functions": 75,
   "statements": 90
 }

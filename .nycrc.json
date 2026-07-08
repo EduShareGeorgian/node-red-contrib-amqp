@@ -6,8 +6,8 @@
   "reporter": ["lcov", "text"],
   "cache": true,
   "check-coverage": true,
-  "statements": 82,
-  "branches": 64,
-  "functions": 77,
-  "lines": 82
+  "statements": 95,
+  "branches": 95,
+  "functions": 95,
+  "lines": 95
 }

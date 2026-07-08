@@ -37,6 +37,71 @@ module.exports = function (RED: NodeAPI): void {
 
     const configAmqp: AmqpInNodeDefaults & AmqpOutNodeDefaults = config
 
+    const resolveConfiguredBrokerId = (rawBroker: unknown): string => {
+      let brokerId = String(rawBroker ?? '').trim()
+      if (!brokerId) {
+        return brokerId
+      }
+
+      for (let depth = 0; depth < 6; depth += 1) {
+        const placeholderMatch = brokerId.match(/^\$\{([^}]+)\}$/)
+        if (!placeholderMatch) {
+          return brokerId
+        }
+
+        const key = placeholderMatch[1].trim()
+        let resolved = ''
+        try {
+          resolved = String(
+            RED.util?.evaluateEnvProperty?.(brokerId, this) ?? '',
+          ).trim()
+        } catch (_e) {
+          // keep unresolved value and try parent scope fallback
+        }
+
+        if (resolved && resolved !== brokerId) {
+          brokerId = resolved
+          continue
+        }
+
+        if (!key.startsWith('$parent.')) {
+          const parentKey = '${$parent.' + key + '}'
+          let parentResolved = ''
+          try {
+            parentResolved = String(
+              RED.util?.evaluateEnvProperty?.(parentKey, this) ?? '',
+            ).trim()
+          } catch (_e) {
+            // ignore parent-scope resolution errors
+          }
+
+          if (parentResolved && parentResolved !== parentKey) {
+            brokerId = parentResolved
+            continue
+          }
+        }
+
+        break
+      }
+
+      return brokerId
+    }
+
+    configAmqp.broker = resolveConfiguredBrokerId(configAmqp.broker)
+
+    if (
+      !configAmqp.broker ||
+      String(configAmqp.broker).trim() === '' ||
+      String(configAmqp.broker).trim() === '_ADD_' ||
+      /^\$\{[^}]+\}$/.test(String(configAmqp.broker).trim())
+    ) {
+      this.status({ fill: 'red', shape: 'ring', text: 'No broker' })
+      this.warn(
+        'AMQP not initialized: broker config is missing or unresolved (_ADD_ or ${...} placeholder).',
+      )
+      return
+    }
+
     // Enhancement: If no queue name, do not setup AMQP
     if (!configAmqp.queueName || String(configAmqp.queueName).trim() === '') {
       this.status({ fill: 'red', shape: 'ring', text: 'No queue name' })

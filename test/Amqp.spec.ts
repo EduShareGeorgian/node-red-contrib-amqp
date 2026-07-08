@@ -10,6 +10,7 @@ import {
   ExchangeType,
   DefaultExchangeName,
 } from '../src/types'
+import { NODE_STATUS } from '../src/constants'
 
 let RED: any
 let amqp: any
@@ -80,7 +81,138 @@ describe('Amqp Class', () => {
     sinon.stub(amqplib, 'connect').resolves(result)
 
     const connection = await amqp.connect()
-    expect(connection).to.eq(result)
+    expect(connection, 'connect should resolve with the amqplib connection').to.eq(
+      result,
+    )
+  })
+
+  it('connect() throws when broker node cannot be resolved', async () => {
+    RED.nodes.getNode = sinon.stub().returns(null)
+
+    let thrownError: Error | null = null
+    try {
+      await amqp.connect()
+    } catch (error) {
+      thrownError = error as Error
+    }
+
+    expect(thrownError, 'connect should throw when broker node is missing').to.not.be
+      .null
+    expect(
+      thrownError?.message,
+      'error should explicitly identify missing broker configuration',
+    ).to.include('broker node not found')
+  })
+
+  it('connect() resolves broker id from env placeholder before node lookup', async () => {
+    const result = { on: (): string => 'ok' }
+    // @ts-ignore
+    sinon.stub(amqplib, 'connect').resolves(result)
+
+    const getNodeStub = sinon.stub().callsFake((id: string) => {
+      return id === 'resolved-broker-id' ? brokerConfigFixture : null
+    })
+    const evaluateEnvPropertyStub = sinon
+      .stub()
+      .withArgs('${amqpOutBroker}', sinon.match.any)
+      .returns('resolved-broker-id')
+
+    RED.nodes.getNode = getNodeStub
+    RED.util = { evaluateEnvProperty: evaluateEnvPropertyStub }
+
+    // @ts-ignore
+    amqp = new Amqp(RED, nodeFixture, {
+      ...nodeConfigFixture,
+      broker: '${amqpOutBroker}',
+    })
+
+    const connection = await amqp.connect()
+
+    expect(connection, 'connect should still resolve with amqplib connection').to.eq(
+      result,
+    )
+    expect(
+      getNodeStub.calledWith('resolved-broker-id'),
+      'getNode should be called with env-resolved broker id',
+    ).to.be.true
+    expect(
+      evaluateEnvPropertyStub.calledOnce,
+      'env placeholder should be evaluated exactly once',
+    ).to.be.true
+  })
+
+  it('connect() resolves nested placeholder via parent env scope', async () => {
+    const result = { on: (): string => 'ok' }
+    // @ts-ignore
+    sinon.stub(amqplib, 'connect').resolves(result)
+
+    const getNodeStub = sinon.stub().callsFake((id: string) => {
+      return id === 'resolved-broker-id' ? brokerConfigFixture : null
+    })
+    const evaluateEnvPropertyStub = sinon.stub().callsFake((value: string) => {
+      if (value === '${amqpOutBroker}') {
+        return '${amqpOutBroker}'
+      }
+      if (value === '${$parent.amqpOutBroker}') {
+        return 'resolved-broker-id'
+      }
+      return ''
+    })
+
+    RED.nodes.getNode = getNodeStub
+    RED.util = { evaluateEnvProperty: evaluateEnvPropertyStub }
+
+    // @ts-ignore
+    amqp = new Amqp(RED, nodeFixture, {
+      ...nodeConfigFixture,
+      broker: '${amqpOutBroker}',
+    })
+
+    const connection = await amqp.connect()
+
+    expect(connection, 'connect should still resolve with amqplib connection').to.eq(
+      result,
+    )
+    expect(
+      getNodeStub.calledWith('resolved-broker-id'),
+      'getNode should receive parent-scope resolved broker id',
+    ).to.be.true
+    expect(
+      evaluateEnvPropertyStub.calledWith('${$parent.amqpOutBroker}', sinon.match.any),
+      'resolver should attempt parent-scope env lookup when direct value remains unresolved',
+    ).to.be.true
+  })
+
+  it('connect() registers connection handlers that set disconnected status', async () => {
+    const handlers: Record<string, (arg?: unknown) => void> = {}
+    const connection = {
+      on: sinon.stub().callsFake((event: string, handler: (arg?: unknown) => void) => {
+        handlers[event] = handler
+      }),
+    }
+    // @ts-ignore
+    sinon.stub(amqplib, 'connect').resolves(connection)
+
+    const statusStub = sinon.stub()
+    const logStub = sinon.stub()
+    amqp.node = {
+      ...nodeFixture,
+      status: statusStub,
+      log: logStub,
+    }
+
+    await amqp.connect()
+
+    expect(handlers.error, 'error handler should be registered').to.be.a('function')
+    expect(handlers.close, 'close handler should be registered').to.be.a('function')
+
+    handlers.error(new Error('network issue'))
+    handlers.close()
+
+    expect(
+      statusStub.calledWith(NODE_STATUS.Disconnected),
+      'both connection error and close events should set disconnected status',
+    ).to.be.true
   })
 
   it('connect() uses amqp protocol when tls is false', async () => {
@@ -102,6 +234,39 @@ describe('Amqp Class', () => {
     ).to.be.true
   })
 
+  it('connect() uses amqps protocol and settings credentials when configured', async () => {
+    const error = 'error!'
+    const result = { on: (): string => error }
+    // @ts-ignore
+    const connectSpy = sinon.stub(amqplib, 'connect').resolves(result)
+
+    const brokerWithTlsAndSettingsCreds = {
+      ...brokerConfigFixture,
+      tls: true,
+      credsFromSettings: true,
+      vhost: 'vh',
+      credentials: { username: 'ignored', password: 'ignored' },
+    }
+    RED.nodes.getNode = sinon.stub().returns(brokerWithTlsAndSettingsCreds)
+    RED.settings = {
+      MW_CONTRIB_AMQP_USERNAME: 'settings-user',
+      MW_CONTRIB_AMQP_PASSWORD: 'settings-pass',
+    }
+
+    await amqp.connect()
+
+    const calledArg = connectSpy.getCall(0).args[0] as any
+    const calledUrl = typeof calledArg === 'string' ? calledArg : calledArg.url
+    expect(
+      (calledUrl as string).startsWith('amqps://'),
+      'URL should start with amqps:// when tls is true',
+    ).to.be.true
+    expect(
+      calledUrl,
+      'URL should use credentials from RED.settings when credsFromSettings is true',
+    ).to.include('settings-user:settings-pass')
+  })
+
   it('initialize()', async () => {
     const createChannelStub = sinon.stub()
     const assertExchangeStub = sinon.stub()
@@ -110,8 +275,12 @@ describe('Amqp Class', () => {
     amqp.assertExchange = assertExchangeStub
 
     await amqp.initialize()
-    expect(createChannelStub.calledOnce).to.equal(true)
-    expect(assertExchangeStub.calledOnce).to.equal(true)
+    expect(createChannelStub.calledOnce, 'initialize should create a channel').to.be
+      .true
+    expect(
+      assertExchangeStub.calledOnce,
+      'initialize should assert exchange after channel creation',
+    ).to.be.true
   })
 
   it('consume()', async () => {
@@ -139,15 +308,48 @@ describe('Amqp Class', () => {
     amqp.node = node
 
     await amqp.consume()
-    expect(assertQueueStub.calledOnce).to.equal(true)
-    expect(bindQueueStub.calledOnce).to.equal(true)
-    expect(send.calledOnce).to.equal(true)
+    expect(assertQueueStub.calledOnce, 'consume should assert queue before consuming').to
+      .be.true
+    expect(bindQueueStub.calledOnce, 'consume should bind queue before consume').to.be
+      .true
+    expect(send.calledOnce, 'consume should forward received AMQP message').to.be.true
     expect(
       send.calledWith({
         content: messageContent,
         payload: messageContent,
       }),
-    ).to.equal(true)
+      'consume should pass payload parsed from message content',
+    ).to.be.true
+  })
+
+  it('consume() ignores null messages from amqplib callback', async () => {
+    const assertQueueStub = sinon.stub().resolves()
+    const bindQueueStub = sinon.stub().resolves()
+    const sendStub = sinon.stub()
+    const errorStub = sinon.stub()
+
+    amqp.channel = {
+      consume: (
+        _queue: string,
+        cb: (value: unknown) => void,
+        _config: GenericJsonObject,
+      ): void => {
+        cb(null)
+      },
+    }
+    amqp.assertQueue = assertQueueStub
+    amqp.bindQueue = bindQueueStub
+    amqp.q = { queue: 'queueName' }
+    amqp.node = { send: sendStub, error: errorStub }
+
+    await amqp.consume()
+
+    expect(
+      sendStub.called,
+      'consume should not call node.send when amqplib delivers null message',
+    ).to.be.false
+    expect(errorStub.called, 'consume should not treat null message as an error').to.be
+      .false
   })
 
   describe('publish()', () => {
@@ -241,6 +443,26 @@ describe('Amqp Class', () => {
       ).to.be.true
     })
 
+    it('includes object message context in publish error callback', async () => {
+      const publishStub = sinon.stub().throws(new Error('publish failed'))
+      const errorStub = sinon.stub()
+      amqp.channel = {
+        publish: publishStub,
+      }
+      amqp.node = {
+        error: errorStub,
+      }
+      const objectMessage = { payload: 'a message', traceId: 't-1' }
+
+      await amqp.publish(objectMessage)
+
+      expect(errorStub.calledOnce, 'publish error should be reported once').to.be.true
+      expect(
+        errorStub.getCall(0).args[1],
+        'object payload should be forwarded as Node-RED error context',
+      ).to.deep.equal(objectMessage)
+    })
+
     it('publishes with properties.correlationId (skips config fallback)', async () => {
       const publishStub = sinon.stub()
       const handleRPCStub = sinon.stub()
@@ -279,7 +501,7 @@ describe('Amqp Class', () => {
       expect(options.replyTo, 'should use config replyTo').to.equal('config-reply')
     })
 
-    it('publishes with uuidv4 fallback when no config properties', async () => {
+    it('publishes with random UUID fallback when no config properties', async () => {
       const publishStub = sinon.stub()
       const handleRPCStub = sinon.stub()
       amqp.channel = { publish: publishStub }
@@ -295,6 +517,91 @@ describe('Amqp Class', () => {
       // When neither properties nor config has values, uuidv4 is used
       expect(options.correlationId, 'should use uuidv4 for correlationId').to.match(/^[0-9a-f-]{36}$/)  // UUID format
       expect(options.replyTo, 'should use uuidv4 for replyTo').to.match(/^[0-9a-f-]{36}$/)  // UUID format
+    })
+
+    it('publishes with mixed fallback (properties correlationId + config replyTo)', async () => {
+      const publishStub = sinon.stub()
+      const handleRPCStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.handleRemoteProcedureCall = handleRPCStub
+      amqp.config.amqpProperties = { replyTo: 'config-reply' }
+      amqp.config.outputs = 1
+
+      await amqp.publish('message', {
+        correlationId: 'prop-correlation-id',
+      })
+
+      expect(publishStub.calledOnce, 'publish should be called once').to.be.true
+      const options = publishStub.getCall(0).args[3] as any
+      expect(
+        options.correlationId,
+        'correlationId should come from properties when provided',
+      ).to.equal('prop-correlation-id')
+      expect(
+        options.replyTo,
+        'replyTo should fall back to config when properties.replyTo is missing',
+      ).to.equal('config-reply')
+    })
+
+    it('publishes with mixed fallback (config correlationId + properties replyTo)', async () => {
+      const publishStub = sinon.stub()
+      const handleRPCStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.handleRemoteProcedureCall = handleRPCStub
+      amqp.config.amqpProperties = { correlationId: 'config-correlation-id' }
+      amqp.config.outputs = 1
+
+      await amqp.publish('message', {
+        replyTo: 'prop-reply-to',
+      })
+
+      expect(publishStub.calledOnce, 'publish should be called once').to.be.true
+      const options = publishStub.getCall(0).args[3] as any
+      expect(
+        options.correlationId,
+        'correlationId should fall back to config when properties.correlationId is missing',
+      ).to.equal('config-correlation-id')
+      expect(
+        options.replyTo,
+        'replyTo should come from properties when provided',
+      ).to.equal('prop-reply-to')
+    })
+
+    it('publishes with UUID fallback when amqpProperties object is undefined', async () => {
+      const publishStub = sinon.stub()
+      const handleRPCStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.handleRemoteProcedureCall = handleRPCStub
+      amqp.config.amqpProperties = undefined as any
+      amqp.config.outputs = 1
+
+      await amqp.publish('message')
+
+      expect(publishStub.calledOnce, 'publish should be called once').to.be.true
+      const options = publishStub.getCall(0).args[3] as any
+      expect(
+        options.correlationId,
+        'correlationId should fall back to generated UUID when config is undefined',
+      ).to.match(/^[0-9a-f-]{36}$/)
+      expect(
+        options.replyTo,
+        'replyTo should fall back to generated UUID when config is undefined',
+      ).to.match(/^[0-9a-f-]{36}$/)
+    })
+
+    it('publishes with routingKey fallback when handlePublish receives undefined routing key', async () => {
+      const publishStub = sinon.stub()
+      amqp.channel = { publish: publishStub }
+      amqp.config.outputs = 0
+
+      // @ts-ignore - testing private method branch directly
+      await amqp.handlePublish(amqp.config, 'message', {}, undefined)
+
+      expect(publishStub.calledOnce, 'publish should be called once').to.be.true
+      expect(
+        publishStub.getCall(0).args[1],
+        'routingKey should default to empty string when undefined',
+      ).to.equal('')
     })
   })
 
@@ -524,6 +831,18 @@ describe('Amqp Class', () => {
     expect(creds.password, 'password should match').to.equal(testPassword)
   })
 
+  it('getCredsFromSettings() defaults to empty strings when settings are missing', () => {
+    amqp.RED.settings = {}
+
+    // @ts-ignore - accessing private method for test branch coverage
+    const creds = amqp.getCredsFromSettings()
+
+    expect(creds.username, 'missing username setting should resolve to empty string').to
+      .equal('')
+    expect(creds.password, 'missing password setting should resolve to empty string').to
+      .equal('')
+  })
+
   it('close()', async () => {
     const { exchangeName, exchangeRoutingKey } = nodeConfigFixture
     const queueName = 'queueName'
@@ -677,6 +996,35 @@ describe('Amqp Class', () => {
     )
   })
 
+  it('bindQueue() uses configParams exchange and amqpProperties when provided', async () => {
+    const queue = 'queueName'
+    const bindQueueStub = sinon.stub().resolves()
+    amqp.channel = { bindQueue: bindQueueStub }
+    amqp.q = { queue }
+
+    await amqp.bindQueue({
+      ...amqp.config,
+      exchange: {
+        name: 'headers-exchange',
+        type: ExchangeType.Headers,
+        routingKey: 'ignored-for-headers',
+        durable: true,
+      },
+      amqpProperties: {
+        headers: { branch: 'covered' },
+      },
+    })
+
+    expect(bindQueueStub.calledOnce, 'bindQueue should run once for headers exchange').to
+      .be.true
+    expect(
+      bindQueueStub.calledWith(queue, 'headers-exchange', '', {
+        branch: 'covered',
+      }),
+      'bindQueue should use headers from configParams.amqpProperties',
+    ).to.be.true
+  })
+
   it('setRoutingKey() updates exchange routing key', () => {
     const newRoutingKey = 'new.routing.key'
     amqp.setRoutingKey(newRoutingKey)
@@ -717,6 +1065,18 @@ describe('Amqp Class', () => {
     // @ts-ignore
     const result = amqp.parseRoutingKeys('key1,key2, key3')
     expect(result, 'should split and trim keys').to.deep.equal(['key1', 'key2', 'key3'])
+  })
+
+  it('parseRoutingKeys() falls back to empty string when no routing source exists', () => {
+    amqp.config.exchange.routingKey = ''
+    // @ts-ignore
+    amqp.q = undefined
+
+    // @ts-ignore
+    const result = amqp.parseRoutingKeys()
+    expect(result, 'should return a single empty routing key fallback').to.deep.equal([
+      '',
+    ])
   })
 
   it('ack() calls channel.ack with correct parameters', () => {

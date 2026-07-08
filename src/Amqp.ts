@@ -1,5 +1,5 @@
 import { NodeAPI, Node, NodeMessage } from 'node-red'
-import { v4 as uuidv4 } from 'uuid'
+import { randomUUID } from 'node:crypto'
 import cloneDeep = require('lodash.clonedeep')
 import {
   Connection,
@@ -23,10 +23,10 @@ import { NODE_STATUS } from './constants'
 
 export default class Amqp {
   private config: AmqpConfig
-  private broker: Node
-  private connection: Awaited<ReturnType<typeof connect>>
-  private channel: Channel
-  private q: Replies.AssertQueue
+  private broker!: Node
+  private connection!: Awaited<ReturnType<typeof connect>>
+  private channel!: Channel
+  private q!: Replies.AssertQueue
 
   constructor(
     private readonly RED: NodeAPI,
@@ -54,7 +54,7 @@ export default class Amqp {
       amqpProperties: this.parseJson(
         config.amqpProperties,
       ) as MessageProperties,
-      headers: this.parseJson(config.headers),
+      headers: this.parseJson(config.headers) as GenericJsonObject,
       outputs: config.outputs,
       rpcTimeout: config.rpcTimeoutMilliseconds,
     }
@@ -62,11 +62,13 @@ export default class Amqp {
 
   public async connect(): Promise<Awaited<ReturnType<typeof connect>>> {
     const { broker } = this.config
+    const brokerId = this.resolveBrokerId(broker)
 
-    // wtf happened to the types?
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    this.broker = this.RED.nodes.getNode(broker)
+    const resolvedBroker = this.RED.nodes.getNode(brokerId)
+    if (!resolvedBroker) {
+      throw new Error(`AMQP broker node not found: ${brokerId}`)
+    }
+    this.broker = resolvedBroker
 
     const brokerUrl = this.getBrokerUrl(this.broker)
     this.node.log(`AMQP state: connecting to ${brokerUrl}`)
@@ -91,12 +93,64 @@ export default class Amqp {
     return this.connection
   }
 
+  private resolveBrokerId(rawBroker: unknown): string {
+    let brokerId = String(rawBroker ?? '').trim()
+    if (!brokerId) {
+      return brokerId
+    }
+
+    // Resolve nested env placeholders through Node-RED's runtime resolver only.
+    // This covers chained values such as ${amqp-broker} -> ${amqpOutBroker} -> <config-id>.
+    for (let depth = 0; depth < 6; depth += 1) {
+      const placeholderMatch = brokerId.match(/^\$\{([^}]+)\}$/)
+      if (!placeholderMatch) {
+        return brokerId
+      }
+
+      const key = placeholderMatch[1].trim()
+      let resolved = ''
+      try {
+        resolved = String(
+          this.RED.util?.evaluateEnvProperty?.(brokerId, this.node) ?? '',
+        ).trim()
+      } catch (_e) {
+        // Keep unresolved and return best known value below.
+      }
+
+      if (resolved && resolved !== brokerId) {
+        brokerId = resolved
+        continue
+      }
+
+      if (!key.startsWith('$parent.')) {
+        let parentResolved = ''
+        const parentKey = '${$parent.' + key + '}'
+        try {
+          parentResolved = String(
+            this.RED.util?.evaluateEnvProperty?.(parentKey, this.node) ?? '',
+          ).trim()
+        } catch (_e) {
+          // ignore and fall through to unresolved return
+        }
+
+        if (parentResolved && parentResolved !== parentKey) {
+          brokerId = parentResolved
+          continue
+        }
+      }
+
+      break
+    }
+
+    return brokerId
+  }
+
   public async initialize(): Promise<Channel> {
     this.node.log(`AMQP state: creating channel`)
     await this.createChannel()
     await this.assertExchange()
     this.node.log(`AMQP state: channel ready`)
-    return this.channel;
+    return this.channel
   }
 
   public async consume(): Promise<void> {
@@ -107,6 +161,9 @@ export default class Amqp {
       await this.channel.consume(
         this.q.queue,
         amqpMessage => {
+          if (!amqpMessage) {
+            return
+          }
           const msg = this.assembleMessage(amqpMessage)
           this.node.send(msg)
           /* istanbul ignore else */
@@ -188,18 +245,23 @@ export default class Amqp {
         correlationId =
           properties?.correlationId ||
           this.config.amqpProperties?.correlationId ||
-          uuidv4()
+          randomUUID()
         replyTo =
-          properties?.replyTo || this.config.amqpProperties?.replyTo || uuidv4()
+          properties?.replyTo || this.config.amqpProperties?.replyTo || randomUUID()
         await this.handleRemoteProcedureCall(correlationId, replyTo)
       }
 
-      const options = {
-        correlationId,
-        replyTo,
+      const options: MessageProperties = {
         ...this.config.amqpProperties,
         ...properties,
       }
+
+      if (rpcRequested) {
+        options.correlationId = correlationId
+        options.replyTo = replyTo
+      }
+
+      const targetRoutingKey = routingKey ?? ''
 
       if (!this.channel || typeof this.channel.publish !== 'function') {
         throw new Error('AMQP channel unavailable (disconnected or reconnecting)')
@@ -209,7 +271,7 @@ export default class Amqp {
       // see https://amqp-node.github.io/amqplib/channel_api.html#channel_publish
       this.channel.publish(
         name,
-        routingKey,
+        targetRoutingKey,
         Buffer.from(msg as string),
         options,
       )
@@ -318,7 +380,8 @@ export default class Amqp {
           }
         } catch (e) {
           /* istanbul ignore next */
-          console.error('Error unbinding queue: ', e.message)
+          const errorMessage = e instanceof Error ? e.message : String(e)
+          console.error('Error unbinding queue: ', errorMessage)
         }
       }
       await this.channel.close()
@@ -340,7 +403,7 @@ export default class Amqp {
       this.node.error(`AMQP Connection Error ${e}`, { payload: { error: e, source: 'Amqp' } })
     })
 
-    return this.channel;
+    return this.channel
   }
 
   private async assertExchange(): Promise<void> {
@@ -418,20 +481,17 @@ export default class Amqp {
     username: string
     password: string
   } {
+    const settings = this.RED.settings as unknown as Record<string, string | undefined>
     return {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      username: this.RED.settings.MW_CONTRIB_AMQP_USERNAME,
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      password: this.RED.settings.MW_CONTRIB_AMQP_PASSWORD,
+      username: settings.MW_CONTRIB_AMQP_USERNAME || '',
+      password: settings.MW_CONTRIB_AMQP_PASSWORD || '',
     }
   }
 
   private parseRoutingKeys(routingKeyArg?: string): string[] {
     const routingKey =
       routingKeyArg || this.config.exchange.routingKey || this.q?.queue || ''
-    const keys = routingKey?.split(',').map(key => key.trim())
+    const keys = routingKey.split(',').map(key => key.trim())
     return keys
   }
 
@@ -448,13 +508,13 @@ export default class Amqp {
     return this.node.type === NodeType.AmqpInManualAck
   }
 
-  private parseJson(jsonInput: unknown): GenericJsonObject {
+  private parseJson(jsonInput: unknown): GenericJsonObject | string {
     let output: unknown
     try {
       output = JSON.parse(jsonInput as string)
     } catch {
       output = jsonInput
     }
-    return output
+    return output as GenericJsonObject | string
   }
 }

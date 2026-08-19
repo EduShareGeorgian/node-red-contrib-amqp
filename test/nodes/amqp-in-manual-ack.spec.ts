@@ -227,6 +227,9 @@ describe('amqp-in-manual-ack Node', () => {
 
     expect(connectStub.called, 'connect should not run when queue is blank').to.be.false
     expect(node.warn.calledOnce, 'node should warn about missing queue').to.be.true
+    expect(node.warn.firstCall.args[0]).to.include(
+      'node n-manual-missing-queue, configured value: "   "',
+    )
   })
 
   it('warns and skips initialization when broker is unresolved placeholder', () => {

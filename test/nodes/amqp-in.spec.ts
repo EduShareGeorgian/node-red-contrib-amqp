@@ -57,6 +57,9 @@ describe('amqp-in Node', () => {
     ).to.be.false
     expect(node.warn.calledOnce, 'node should warn about missing queue name').to.be
       .true
+    expect(node.warn.firstCall.args[0]).to.include(
+      'node n-in-1, configured value: "   "',
+    )
     expect(
       node.status.calledWithMatch({ text: 'No queue name' }),
       'node status should show missing queue name',

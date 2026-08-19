@@ -105,7 +105,9 @@ module.exports = function (RED: NodeAPI): void {
     // Enhancement: If no queue name, do not setup AMQP
     if (!configAmqp.queueName || String(configAmqp.queueName).trim() === '') {
       this.status({ fill: 'red', shape: 'ring', text: 'No queue name' })
-      this.warn('AMQP not initialized: queue name is missing in configuration.')
+      this.warn(
+        `AMQP not initialized: queue name is missing in configuration (node ${this.id || 'unknown'}, configured value: ${JSON.stringify(configAmqp.queueName)}).`,
+      )
       return
     }
 

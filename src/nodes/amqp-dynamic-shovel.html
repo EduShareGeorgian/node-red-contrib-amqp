@@ -1,0 +1,87 @@
+<script type="text/javascript">
+  function isValidShovelBrokerReference(value) {
+    return /^\$\{[^}]+\}$/.test(value || '') || !!RED.nodes.node(value)
+  }
+
+  RED.nodes.registerType('amqp-dynamic-shovel', {
+    category: 'AMQP',
+    color: '#D1649C',
+    defaults: {
+      name: { value: '' },
+      managementBroker: { value: '', type: 'amqp-broker', required: true, validate: isValidShovelBrokerReference },
+      managementPort: { value: 15672, required: true, validate: RED.validators.number() },
+      managementTls: { value: false },
+      shovelVhost: { value: '/' },
+      shovelName: { value: '', required: true },
+      sourceBroker: { value: '', type: 'amqp-broker', required: true, validate: isValidShovelBrokerReference },
+      sourceQueue: { value: '', required: true },
+      sourcePredeclared: { value: true },
+      prefetch: { value: 100, required: true, validate: RED.validators.number() },
+      destinationBroker: { value: '', type: 'amqp-broker', required: true, validate: isValidShovelBrokerReference },
+      destinationType: { value: 'exchange' },
+      destinationName: { value: '', required: true },
+      destinationRoutingKey: { value: '' },
+      destinationPredeclared: { value: true },
+      ackMode: { value: 'on-confirm' },
+      reconnectDelay: { value: 5, required: true, validate: RED.validators.number() },
+      deleteAfter: { value: 'never' },
+      addForwardHeaders: { value: true },
+    },
+    credentials: {
+      managementUsername: { type: 'text' },
+      managementPassword: { type: 'password' },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: 'rabbitmq.svg',
+    label: function () {
+      return this.name || this.shovelName || 'dynamic shovel'
+    },
+    oneditprepare: function () {
+      const updateDestinationFields = function () {
+        const isQueue = $('#node-input-destinationType').val() === 'queue'
+        $('.shovel-destination-routing-key').toggle(!isQueue)
+        $('.shovel-destination-predeclared').toggle(isQueue)
+      }
+      $('#node-input-destinationType').on('change', updateDestinationFields)
+      updateDestinationFields()
+    },
+  })
+</script>
+
+<script type="text/html" data-template-name="amqp-dynamic-shovel">
+  <div class="form-row"><label for="node-input-name"><i class="fa fa-tag"></i> Name</label><input type="text" id="node-input-name"></div>
+  <h4>Management API</h4>
+  <div class="form-row"><label for="node-input-managementBroker"><i class="fa fa-server"></i> Broker</label><input type="text" id="node-input-managementBroker"></div>
+  <div class="form-row"><label for="node-input-managementPort">Port</label><input type="text" id="node-input-managementPort"></div>
+  <div class="form-row"><label for="node-input-managementTls">HTTPS</label><input type="checkbox" id="node-input-managementTls" style="width:auto"></div>
+  <div class="form-row"><label for="node-input-managementUsername"><i class="fa fa-user"></i> User</label><input type="text" id="node-input-managementUsername"></div>
+  <div class="form-row"><label for="node-input-managementPassword"><i class="fa fa-lock"></i> Password</label><input type="password" id="node-input-managementPassword"></div>
+  <div class="form-row"><label for="node-input-shovelVhost">Shovel vhost</label><input type="text" id="node-input-shovelVhost"></div>
+  <div class="form-row"><label for="node-input-shovelName">Shovel name</label><input type="text" id="node-input-shovelName"></div>
+  <h4>Source</h4>
+  <div class="form-row"><label for="node-input-sourceBroker">Broker</label><input type="text" id="node-input-sourceBroker"></div>
+  <div class="form-row"><label for="node-input-sourceQueue">Queue</label><input type="text" id="node-input-sourceQueue"></div>
+  <div class="form-row"><label for="node-input-sourcePredeclared">Predeclared</label><input type="checkbox" id="node-input-sourcePredeclared" style="width:auto"></div>
+  <div class="form-row"><label for="node-input-prefetch">Prefetch</label><input type="text" id="node-input-prefetch"></div>
+  <h4>Destination</h4>
+  <div class="form-row"><label for="node-input-destinationBroker">Broker</label><input type="text" id="node-input-destinationBroker"></div>
+  <div class="form-row"><label for="node-input-destinationType">Type</label><select id="node-input-destinationType"><option value="exchange">Exchange</option><option value="queue">Queue</option></select></div>
+  <div class="form-row"><label for="node-input-destinationName">Name</label><input type="text" id="node-input-destinationName"></div>
+  <div class="form-row shovel-destination-routing-key"><label for="node-input-destinationRoutingKey">Routing key</label><input type="text" id="node-input-destinationRoutingKey"></div>
+  <div class="form-row shovel-destination-predeclared"><label for="node-input-destinationPredeclared">Predeclared</label><input type="checkbox" id="node-input-destinationPredeclared" style="width:auto"></div>
+  <h4>Reliability</h4>
+  <div class="form-row"><label for="node-input-ackMode">Ack mode</label><select id="node-input-ackMode"><option value="on-confirm">On confirm</option><option value="on-publish">On publish</option><option value="no-ack">No ack</option></select></div>
+  <div class="form-row"><label for="node-input-reconnectDelay">Reconnect (s)</label><input type="text" id="node-input-reconnectDelay"></div>
+  <div class="form-row"><label for="node-input-deleteAfter">Delete after</label><input type="text" id="node-input-deleteAfter" placeholder="never, queue-length, or message count"></div>
+  <div class="form-row"><label for="node-input-addForwardHeaders">Forward headers</label><input type="checkbox" id="node-input-addForwardHeaders" style="width:auto"></div>
+</script>
+
+<script type="text/html" data-help-name="amqp-dynamic-shovel">
+  <p>Creates and controls a RabbitMQ dynamic shovel using the Management HTTP API.</p>
+  <p>The source and destination AMQP broker nodes may target different hosts and virtual hosts. Management credentials require permission to manage shovel runtime parameters.</p>
+  <h3>Input</h3>
+  <dl class="message-properties"><dt>action <span class="property-type">string</span></dt><dd><code>create</code>, <code>update</code>, <code>delete</code>, <code>status</code>, or <code>restart</code>. Defaults to <code>create</code>.</dd></dl>
+  <h3>Output</h3>
+  <p>Returns the RabbitMQ response in <code>msg.payload</code>, the HTTP status in <code>msg.statusCode</code>, and redacted operation details in <code>msg.shovel</code>.</p>
+</script>

@@ -11,7 +11,6 @@ import {
 } from 'amqplib'
 import {
   AmqpConfig,
-  BrokerConfig,
   NodeType,
   AssembledMessage,
   GenericJsonObject,
@@ -20,6 +19,11 @@ import {
   AmqpOutNodeDefaults,
 } from './types'
 import { NODE_STATUS } from './constants'
+import {
+  getBrokerCredentials,
+  getBrokerUrl,
+  resolveBrokerId,
+} from './broker-utils'
 
 export default class Amqp {
   private config: AmqpConfig
@@ -62,7 +66,7 @@ export default class Amqp {
 
   public async connect(): Promise<Awaited<ReturnType<typeof connect>>> {
     const { broker } = this.config
-    const brokerId = this.resolveBrokerId(broker)
+    const brokerId = resolveBrokerId(this.RED, this.node, broker)
 
     const resolvedBroker = this.RED.nodes.getNode(brokerId)
     if (!resolvedBroker) {
@@ -70,7 +74,7 @@ export default class Amqp {
     }
     this.broker = resolvedBroker
 
-    const brokerUrl = this.getBrokerUrl(this.broker)
+    const brokerUrl = getBrokerUrl(this.RED, this.broker as any)
     this.node.log(`AMQP state: connecting to ${brokerUrl}`)
     this.connection = await connect(brokerUrl, { heartbeat: 2 })
 
@@ -91,58 +95,6 @@ export default class Amqp {
     this.node.log(`AMQP state: connection established`)
 
     return this.connection
-  }
-
-  private resolveBrokerId(rawBroker: unknown): string {
-    let brokerId = String(rawBroker ?? '').trim()
-    if (!brokerId) {
-      return brokerId
-    }
-
-    // Resolve nested env placeholders through Node-RED's runtime resolver only.
-    // This covers chained values such as ${amqp-broker} -> ${amqpOutBroker} -> <config-id>.
-    for (let depth = 0; depth < 6; depth += 1) {
-      const placeholderMatch = brokerId.match(/^\$\{([^}]+)\}$/)
-      if (!placeholderMatch) {
-        return brokerId
-      }
-
-      const key = placeholderMatch[1].trim()
-      let resolved = ''
-      try {
-        resolved = String(
-          this.RED.util?.evaluateEnvProperty?.(brokerId, this.node) ?? '',
-        ).trim()
-      } catch (_e) {
-        // Keep unresolved and return best known value below.
-      }
-
-      if (resolved && resolved !== brokerId) {
-        brokerId = resolved
-        continue
-      }
-
-      if (!key.startsWith('$parent.')) {
-        let parentResolved = ''
-        const parentKey = '${$parent.' + key + '}'
-        try {
-          parentResolved = String(
-            this.RED.util?.evaluateEnvProperty?.(parentKey, this.node) ?? '',
-          ).trim()
-        } catch (_e) {
-          // ignore and fall through to unresolved return
-        }
-
-        if (parentResolved && parentResolved !== parentKey) {
-          brokerId = parentResolved
-          continue
-        }
-      }
-
-      break
-    }
-
-    return brokerId
   }
 
   public async initialize(): Promise<Channel> {
@@ -220,7 +172,9 @@ export default class Amqp {
     } catch (e) {
       this.node.error(
         `Could not publish message: ${e}`,
-        typeof msg === 'object' && msg !== null ? (msg as NodeMessage) : undefined,
+        typeof msg === 'object' && msg !== null
+          ? (msg as NodeMessage)
+          : undefined,
       )
     }
   }
@@ -247,7 +201,9 @@ export default class Amqp {
           this.config.amqpProperties?.correlationId ||
           randomUUID()
         replyTo =
-          properties?.replyTo || this.config.amqpProperties?.replyTo || randomUUID()
+          properties?.replyTo ||
+          this.config.amqpProperties?.replyTo ||
+          randomUUID()
         await this.handleRemoteProcedureCall(correlationId, replyTo)
       }
 
@@ -264,7 +220,9 @@ export default class Amqp {
       const targetRoutingKey = routingKey ?? ''
 
       if (!this.channel || typeof this.channel.publish !== 'function') {
-        throw new Error('AMQP channel unavailable (disconnected or reconnecting)')
+        throw new Error(
+          'AMQP channel unavailable (disconnected or reconnecting)',
+        )
       }
 
       // when the name field is empty, publish just like the sendToQueue method;
@@ -356,13 +314,8 @@ export default class Amqp {
 
   public async close(): Promise<void> {
     const {
-      exchange: {
-        name: exchangeName
-      },
-      queue: {
-        name: queueName,
-        autoDelete: queueAutoDelete
-      }
+      exchange: { name: exchangeName },
+      queue: { name: queueName, autoDelete: queueAutoDelete },
     } = this.config
 
     try {
@@ -387,7 +340,7 @@ export default class Amqp {
       await this.channel.close()
       await this.connection.close()
       this.node.log(`AMQP state: client closed`)
-    } catch (e) { } // Need to catch here but nothing further is necessary
+    } catch (e) {} // Need to catch here but nothing further is necessary
   }
 
   private async createChannel(): Promise<Channel> {
@@ -400,7 +353,9 @@ export default class Amqp {
     this.channel.on('error', (e): void => {
       // Set node to disconnected status
       this.node.status(NODE_STATUS.Disconnected)
-      this.node.error(`AMQP Connection Error ${e}`, { payload: { error: e, source: 'Amqp' } })
+      this.node.error(`AMQP Connection Error ${e}`, {
+        payload: { error: e, source: 'Amqp' },
+      })
     })
 
     return this.channel
@@ -457,35 +412,10 @@ export default class Amqp {
     return type === ExchangeType.Direct || type === ExchangeType.Topic
   }
 
-  private getBrokerUrl(broker: Node): string {
-    let url = ''
-
-    if (broker) {
-      const { host, port, vhost, tls, credsFromSettings, credentials } =
-        broker as unknown as BrokerConfig
-
-      const { username, password } = credsFromSettings
-        ? this.getCredsFromSettings()
-        : credentials
-
-      const protocol = tls ? 'amqps' : 'amqp'
-      url = `${protocol}://${encodeURIComponent(username)}:${encodeURIComponent(
-        password,
-      )}@${host}:${port}/${vhost}`
-    }
-
-    return url
-  }
-
-  private getCredsFromSettings(): {
-    username: string
-    password: string
-  } {
-    const settings = this.RED.settings as unknown as Record<string, string | undefined>
-    return {
-      username: settings.MW_CONTRIB_AMQP_USERNAME || '',
-      password: settings.MW_CONTRIB_AMQP_PASSWORD || '',
-    }
+  private getCredsFromSettings(): { username: string; password: string } {
+    return getBrokerCredentials(this.RED, {
+      credsFromSettings: true,
+    } as any)
   }
 
   private parseRoutingKeys(routingKeyArg?: string): string[] {

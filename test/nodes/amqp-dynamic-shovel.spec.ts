@@ -22,7 +22,10 @@ import * as sinon from 'sinon'
 describe('amqp-dynamic-shovel Node', () => {
   afterEach(() => sinon.restore())
 
-  function setup(destinationType: 'exchange' | 'queue' = 'exchange') {
+  function setup(
+    destinationType: 'exchange' | 'queue' | 'original' = 'exchange',
+    destinationRoutingKey = 'retry.#',
+  ) {
     let constructor: any
     let input: any
     const send = sinon.stub()
@@ -79,8 +82,13 @@ describe('amqp-dynamic-shovel Node', () => {
       prefetch: 25,
       destinationBroker: 'destination',
       destinationType,
-      destinationName: destinationType === 'queue' ? 'retry' : 'recovery',
-      destinationRoutingKey: 'retry.#',
+      destinationName:
+        destinationType === 'queue'
+          ? 'retry'
+          : destinationType === 'exchange'
+            ? 'recovery'
+            : '',
+      destinationRoutingKey,
       destinationPredeclared: true,
       ackMode: 'on-confirm',
       reconnectDelay: 5,
@@ -132,6 +140,35 @@ describe('amqp-dynamic-shovel Node', () => {
     expect(value['dest-queue']).to.equal('retry')
     expect(value['dest-predeclared']).to.equal(true)
     expect(value).not.to.have.property('dest-exchange')
+  })
+
+  it('preserves the source routing key for an exchange without an override', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(new Response('', { status: 201 }))
+    const { input, done } = setup('exchange', '')
+
+    await input({}, sinon.stub(), done)
+
+    const request = (globalThis.fetch as sinon.SinonStub).firstCall
+      .args[1] as RequestInit
+    const value = JSON.parse(String(request.body)).value
+    expect(value['dest-exchange']).to.equal('recovery')
+    expect(value).not.to.have.property('dest-exchange-key')
+    expect(value).not.to.have.property('dest-queue')
+  })
+
+  it('preserves the original exchange and routing key when requested', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(new Response('', { status: 201 }))
+    const { input, done } = setup('original')
+
+    await input({}, sinon.stub(), done)
+
+    const request = (globalThis.fetch as sinon.SinonStub).firstCall
+      .args[1] as RequestInit
+    const value = JSON.parse(String(request.body)).value
+    expect(value).not.to.have.property('dest-queue')
+    expect(value).not.to.have.property('dest-exchange')
+    expect(value).not.to.have.property('dest-exchange-key')
+    expect(done.calledOnceWithExactly()).to.be.true
   })
 
   it('uses the shovel status endpoint', async () => {

@@ -3,7 +3,7 @@ import { BrokerConfig } from '../types'
 import { getBrokerUrl, resolveBrokerId } from '../broker-utils'
 
 type ShovelAction = 'create' | 'update' | 'delete' | 'status' | 'restart'
-type DestinationType = 'exchange' | 'queue'
+type DestinationType = 'exchange' | 'queue' | 'original'
 
 interface DynamicShovelConfig extends NodeDef {
   managementBroker: string
@@ -75,7 +75,7 @@ module.exports = function (RED: NodeAPI): void {
       if (!config.sourceQueue) {
         throw new Error('Source queue is required')
       }
-      if (!config.destinationName) {
+      if (config.destinationType !== 'original' && !config.destinationName) {
         throw new Error('Destination name is required')
       }
       const sourceBroker = getBroker(config.sourceBroker, 'Source')
@@ -118,7 +118,7 @@ module.exports = function (RED: NodeAPI): void {
       if (config.destinationType === 'queue') {
         value['dest-queue'] = config.destinationName
         value['dest-predeclared'] = config.destinationPredeclared
-      } else {
+      } else if (config.destinationType === 'exchange') {
         value['dest-exchange'] = config.destinationName
         if (config.destinationRoutingKey) {
           value['dest-exchange-key'] = config.destinationRoutingKey

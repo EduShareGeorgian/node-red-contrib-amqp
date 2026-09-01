@@ -19,7 +19,7 @@
       prefetch: { value: 100, required: true, validate: RED.validators.number() },
       destinationBroker: { value: '', type: 'amqp-broker', required: true, validate: isValidShovelBrokerReference },
       destinationType: { value: 'exchange' },
-      destinationName: { value: '', required: true },
+      destinationName: { value: '' },
       destinationRoutingKey: { value: '' },
       destinationPredeclared: { value: true },
       ackMode: { value: 'on-confirm' },
@@ -39,9 +39,13 @@
     },
     oneditprepare: function () {
       const updateDestinationFields = function () {
-        const isQueue = $('#node-input-destinationType').val() === 'queue'
-        $('.shovel-destination-routing-key').toggle(!isQueue)
+        const destinationType = $('#node-input-destinationType').val()
+        const isQueue = destinationType === 'queue'
+        const isExchange = destinationType === 'exchange'
+        $('.shovel-destination-name').toggle(destinationType !== 'original')
+        $('.shovel-destination-routing-key').toggle(isExchange)
         $('.shovel-destination-predeclared').toggle(isQueue)
+        $('.shovel-queue-routing-note').toggle(isQueue)
       }
       $('#node-input-destinationType').on('change', updateDestinationFields)
       updateDestinationFields()
@@ -66,10 +70,11 @@
   <div class="form-row"><label for="node-input-prefetch">Prefetch</label><input type="text" id="node-input-prefetch"></div>
   <h4>Destination</h4>
   <div class="form-row"><label for="node-input-destinationBroker">Broker</label><input type="text" id="node-input-destinationBroker"></div>
-  <div class="form-row"><label for="node-input-destinationType">Type</label><select id="node-input-destinationType"><option value="exchange">Exchange</option><option value="queue">Queue</option></select></div>
-  <div class="form-row"><label for="node-input-destinationName">Name</label><input type="text" id="node-input-destinationName"></div>
+  <div class="form-row"><label for="node-input-destinationType">Type</label><select id="node-input-destinationType"><option value="exchange">Exchange</option><option value="queue">Queue (routing key becomes queue name)</option><option value="original">Original exchange and routing key</option></select></div>
+  <div class="form-row shovel-destination-name"><label for="node-input-destinationName">Name</label><input type="text" id="node-input-destinationName"></div>
   <div class="form-row shovel-destination-routing-key"><label for="node-input-destinationRoutingKey">Routing key</label><input type="text" id="node-input-destinationRoutingKey"></div>
   <div class="form-row shovel-destination-predeclared"><label for="node-input-destinationPredeclared">Predeclared</label><input type="checkbox" id="node-input-destinationPredeclared" style="width:auto"></div>
+  <div class="form-tips shovel-queue-routing-note">RabbitMQ publishes a queue destination through the default exchange, so the delivered routing key is the destination queue name. To preserve the source routing key, select Exchange and leave Routing key blank, or select Original exchange and routing key.</div>
   <h4>Reliability</h4>
   <div class="form-row"><label for="node-input-ackMode">Ack mode</label><select id="node-input-ackMode"><option value="on-confirm">On confirm</option><option value="on-publish">On publish</option><option value="no-ack">No ack</option></select></div>
   <div class="form-row"><label for="node-input-reconnectDelay">Reconnect (s)</label><input type="text" id="node-input-reconnectDelay"></div>
@@ -80,6 +85,7 @@
 <script type="text/html" data-help-name="amqp-dynamic-shovel">
   <p>Creates and controls a RabbitMQ dynamic shovel using the Management HTTP API.</p>
   <p>The source and destination AMQP broker nodes may target different hosts and virtual hosts. Management credentials require permission to manage shovel runtime parameters.</p>
+  <p><strong>Destination routing:</strong> Queue mode uses RabbitMQ's default exchange, so the destination queue name replaces the source routing key. Exchange mode preserves the source routing key when Routing key is blank. Original mode omits both destination fields and preserves the source exchange and routing key; matching destination topology must already exist.</p>
   <h3>Input</h3>
   <dl class="message-properties"><dt>action <span class="property-type">string</span></dt><dd><code>create</code>, <code>update</code>, <code>delete</code>, <code>status</code>, or <code>restart</code>. Defaults to <code>create</code>.</dd></dl>
   <h3>Output</h3>
